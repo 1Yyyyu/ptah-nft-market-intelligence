@@ -82,7 +82,6 @@ function updateSummary() {
   });
   $('#depthBest').textContent = `${current.bestBid.toFixed(2)} USDT`;
   $('#marketCap').textContent = `${fmtMoney(current.marketCap)} / ${fmtMoney(current.fdv)} USDT`;
-  $('#costLine').textContent = `${current.costLine.toFixed(2)} / ${current.breakEven.toFixed(2)} USDT`;
   const marketTime = new Date(marketSnapshot.indexedAt);
   $('#marketSnapshot').textContent = `挂单快照 ${marketTime.toLocaleString('zh-CN', { hour12: false })}`;
 }
@@ -131,11 +130,9 @@ function depthSummary(assetKey) {
   }
   const weighted = quantity ? escrow / quantity : 0;
   const gap = current.bestBid ? Math.max(0, (current.bestBid - median) / current.bestBid * 100) : 0;
-  const near = levels.filter((level) => level.price >= current.bestBid * (1 - Math.min(range, 10) / 100)).reduce((sum, level) => sum + level.quantity, 0);
-  const concentration = quantity ? near / quantity * 100 : 0;
-  const scoreValue = Math.min(100, quantity / Math.max(1, current.circulating) * 100 * 0.7 + concentration * 0.3);
-  const score = scoreValue >= 60 ? '强' : scoreValue >= 20 ? '中' : '弱';
-  return { current, levels, quantity, escrow, median, weighted, gap, concentration, score, scoreValue };
+  const maxShare = quantity ? Math.max(...levels.map((level) => level.quantity)) / quantity * 100 : 0;
+  const coverage = quantity / Math.max(1, current.circulating) * 100;
+  return { current, levels, quantity, escrow, median, weighted, gap, maxShare, coverage };
 }
 
 function renderComparison() {
@@ -144,7 +141,7 @@ function renderComparison() {
     const label = key === 'relic' ? 'Relics · NFT' : 'Looms · 矿机';
     const bars = summary.levels.slice(0, 8);
     const max = Math.max(1, ...bars.map((level) => level.quantity));
-    return `<button type="button" class="compare-card ${key === asset ? 'selected' : ''}" data-market-asset="${key}"><header><strong>${label}</strong><span>${summary.current.openOrders.toLocaleString()} 笔挂单</span></header><div class="compare-values"><div><small>最佳价</small><b>${summary.current.bestBid.toFixed(2)}</b></div><div><small>数量中位价</small><b>${summary.median.toFixed(2)}</b></div><div><small>${range}% 可承接</small><b>${summary.quantity.toLocaleString()}</b></div><div><small>深度评分</small><b>${summary.score}</b></div></div><div class="compare-bars">${bars.map((level) => `<i style="height:${Math.max(8, level.quantity / max * 100)}%" title="${level.price.toFixed(2)} USDT · ${level.quantity.toLocaleString()} NFT"></i>`).join('')}</div><small class="compare-foot">中位价距最佳价 ${summary.gap.toFixed(1)}% · 价格带集中度 ${summary.concentration.toFixed(1)}%</small></button>`;
+    return `<button type="button" class="compare-card ${key === asset ? 'selected' : ''}" data-market-asset="${key}"><header><strong>${label}</strong><span>${summary.current.openOrders.toLocaleString()} 笔挂单</span></header><div class="compare-values"><div><small>最佳价</small><b>${summary.current.bestBid.toFixed(2)}</b></div><div><small>数量中位价</small><b>${summary.median.toFixed(2)}</b></div><div><small>${range}% 可承接</small><b>${summary.quantity.toLocaleString()}</b></div><div><small>流通量覆盖</small><b>${summary.coverage.toFixed(2)}%</b></div></div><div class="compare-bars">${bars.map((level) => `<i style="height:${Math.max(8, level.quantity / max * 100)}%" title="${level.price.toFixed(2)} USDT · ${level.quantity.toLocaleString()} NFT"></i>`).join('')}</div><small class="compare-foot">中位价距最佳价 ${summary.gap.toFixed(1)}% · 最大单档占比 ${summary.maxShare.toFixed(1)}%</small></button>`;
   }).join('');
   $('#compareGrid').innerHTML = markup;
   $$('[data-market-asset]').forEach((button) => button.onclick = () => {
@@ -304,7 +301,7 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime
     context.strokeStyle = '#262721';
     context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
     context.fillStyle = '#77756d';
-    context.fillText(value.toFixed(asset === 'loom' ? 0 : 2), padding.left - 8, y);
+    context.fillText(value.toFixed(timelineAsset === 'loom' ? 0 : 2), padding.left - 8, y);
   }
   const ticks = 4;
   context.textAlign = 'center';
