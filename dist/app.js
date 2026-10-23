@@ -397,6 +397,10 @@ function renderTimeline() {
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain, startTime, endTime);
   const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain, startTime, endTime);
   const volumeView = drawVolume(trades, startTime, endTime);
+  const windowUsdt = trades.reduce((sum, row) => sum + row[1], 0);
+  $('#volumeNow').textContent = `${trades.length.toLocaleString()} NFT · ${windowUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
+  const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
+  $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
   $('#tradeTimeline').style.display = historySeries === 'bid' ? 'none' : 'block';
   $('#bidTimeline').style.display = historySeries === 'trade' ? 'none' : 'block';
   const titles = { trade: ['NFT 成交成本', '逐笔成交价格与时间对应'], bid: ['NFT 历史挂单', '按历史成交参考价过滤异常挂单'], hybrid: ['成交成本 + 历史挂单', '两类数据共用价格轴和时间轴'] };
