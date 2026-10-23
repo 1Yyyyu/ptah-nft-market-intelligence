@@ -22,6 +22,7 @@ let historyMode = 'hybrid';
 let historyRange = 'all';
 let historyScale = 'focus';
 let historySeries = 'trade';
+let timelineAsset = 'relic';
 let timelineCursorRatio = null;
 let hoverTime = null;
 let timelineView = null;
@@ -118,6 +119,41 @@ function visibleLevels() {
   return current.levels.filter((level) => level.price >= floor);
 }
 
+function depthSummary(assetKey) {
+  const current = assets[assetKey];
+  const levels = current.levels.filter((level) => level.price >= current.bestBid * (1 - range / 100));
+  const quantity = levels.reduce((sum, level) => sum + level.quantity, 0);
+  const escrow = levels.reduce((sum, level) => sum + level.escrow, 0);
+  let running = 0; let median = 0;
+  for (const level of levels) {
+    running += level.quantity;
+    if (running >= quantity / 2) { median = level.price; break; }
+  }
+  const weighted = quantity ? escrow / quantity : 0;
+  const gap = current.bestBid ? Math.max(0, (current.bestBid - median) / current.bestBid * 100) : 0;
+  const near = levels.filter((level) => level.price >= current.bestBid * (1 - Math.min(range, 10) / 100)).reduce((sum, level) => sum + level.quantity, 0);
+  const concentration = quantity ? near / quantity * 100 : 0;
+  const scoreValue = Math.min(100, quantity / Math.max(1, current.circulating) * 100 * 0.7 + concentration * 0.3);
+  const score = scoreValue >= 60 ? '强' : scoreValue >= 20 ? '中' : '弱';
+  return { current, levels, quantity, escrow, median, weighted, gap, concentration, score, scoreValue };
+}
+
+function renderComparison() {
+  const markup = ['relic', 'loom'].map((key) => {
+    const summary = depthSummary(key);
+    const label = key === 'relic' ? 'Relics · NFT' : 'Looms · 矿机';
+    const bars = summary.levels.slice(0, 8);
+    const max = Math.max(1, ...bars.map((level) => level.quantity));
+    return `<button type="button" class="compare-card ${key === asset ? 'selected' : ''}" data-market-asset="${key}"><header><strong>${label}</strong><span>${summary.current.openOrders.toLocaleString()} 笔挂单</span></header><div class="compare-values"><div><small>最佳价</small><b>${summary.current.bestBid.toFixed(2)}</b></div><div><small>数量中位价</small><b>${summary.median.toFixed(2)}</b></div><div><small>${range}% 可承接</small><b>${summary.quantity.toLocaleString()}</b></div><div><small>深度评分</small><b>${summary.score}</b></div></div><div class="compare-bars">${bars.map((level) => `<i style="height:${Math.max(8, level.quantity / max * 100)}%" title="${level.price.toFixed(2)} USDT · ${level.quantity.toLocaleString()} NFT"></i>`).join('')}</div><small class="compare-foot">中位价距最佳价 ${summary.gap.toFixed(1)}% · 价格带集中度 ${summary.concentration.toFixed(1)}%</small></button>`;
+  }).join('');
+  $('#compareGrid').innerHTML = markup;
+  $$('[data-market-asset]').forEach((button) => button.onclick = () => {
+    asset = button.dataset.marketAsset;
+    $$('[data-asset]').forEach((item) => item.classList.toggle('active', item.dataset.asset === asset));
+    render();
+  });
+}
+
 function renderChart() {
   const levels = visibleLevels();
   const current = assets[asset];
@@ -138,22 +174,34 @@ function renderChart() {
     }
   }
   const weightedPrice = totalQuantity ? totalEscrow / totalQuantity : 0;
+  const medianGap = current.bestBid ? Math.max(0, (current.bestBid - medianPrice) / current.bestBid * 100) : 0;
+  const nearQuantity = data.filter((level) => level.price >= current.bestBid * (1 - Math.min(range, 10) / 100)).reduce((sum, level) => sum + level.quantity, 0);
+  const concentration = totalQuantity ? nearQuantity / totalQuantity * 100 : 0;
+  const coverage = totalQuantity / Math.max(1, current.circulating) * 100;
+  const maxShare = totalQuantity ? Math.max(...data.map((level) => level.quantity)) / totalQuantity * 100 : 0;
   const max = Math.max(1, cumulative);
   const chartData = data.length > 12
     ? data.filter((_, index) => index === 0 || index === data.length - 1 || index % Math.ceil(data.length / 12) === 0)
     : data;
-  const x = (index) => chartData.length === 1 ? 365 : 55 + index * (620 / (chartData.length - 1));
+  const floorPrice = current.bestBid * (1 - range / 100);
+  const priceSpan = Math.max(0.000001, current.bestBid - floorPrice);
+  const x = (price) => 55 + (current.bestBid - price) / priceSpan * 620;
   const y = (value) => 250 - value / max * 190;
-  const points = chartData.map((level, index) => `${x(index)},${y(level.cumulative)}`);
+  const points = chartData.map((level) => `${x(level.price)},${y(level.cumulative)}`);
 
-  $('.chart-label').textContent = `最佳价下方 ${range}% · ${fmtMoney(totalEscrow)} USDT · ${cumulative.toLocaleString()} NFT`;
+  $('.chart-label').textContent = `${range}% 价格带 · ${fmtMoney(totalEscrow)} USDT · ${cumulative.toLocaleString()} NFT`;
   $('#medianBid').textContent = `${medianPrice.toFixed(2)} USDT`;
   $('#weightedAvg').textContent = `${weightedPrice.toFixed(2)} USDT`;
+  $('#medianGap').textContent = `${medianGap.toFixed(1)}%`;
+  $('#depthScore').textContent = `${coverage.toFixed(2)}%`;
+  $('#depthConcentration').textContent = `${maxShare.toFixed(1)}%`;
+  $('#depthQuantity').textContent = `${nearQuantity.toLocaleString()} NFT`;
+  $('#depthExplainText').textContent = `当前 ${range}% 价格带可承接 ${totalQuantity.toLocaleString()} NFT；其中 ${concentration.toFixed(1)}% 集中在最佳价附近，曲线越陡代表承接越集中。`;
   $('#linePath').setAttribute('d', points.length ? `M ${points.join(' L ')}` : '');
-  $('#areaPath').setAttribute('d', points.length ? `M ${x(0)},250 L ${points.join(' L ')} L ${x(chartData.length - 1)},250 Z` : '');
+  $('#areaPath').setAttribute('d', points.length ? `M ${x(chartData[0].price)},250 L ${points.join(' L ')} L ${x(chartData[chartData.length - 1].price)},250 Z` : '');
   $('#gridLines').innerHTML = [0, 1, 2, 3, 4].map((index) => `<line x1="55" x2="675" y1="${60 + index * 47.5}" y2="${60 + index * 47.5}" stroke="#262721"/><text x="18" y="${64 + index * 47.5}" fill="#595a53" font-size="9">${Math.round(max * (4 - index) / 4)}</text>`).join('');
-  $('#axisLabels').innerHTML = chartData.map((level, index) => `<text x="${x(index)}" y="277" text-anchor="middle" fill="#64645d" font-size="9">${level.price.toFixed(asset === 'loom' ? 0 : 2)}</text>`).join('') + '<text x="365" y="297" text-anchor="middle" fill="#66665f" font-size="9">挂单价 (USDT)</text>';
-  $('#chartDots').innerHTML = chartData.map((level, index) => `<circle data-i="${index}" cx="${x(index)}" cy="${y(level.cumulative)}" r="8" fill="transparent" stroke="transparent" tabindex="0"/>`).join('');
+  $('#axisLabels').innerHTML = [0, 1, 2, 3, 4].map((index) => { const price = current.bestBid - priceSpan * index / 4; const label = index === 0 ? '最佳价' : `-${(range * index / 4).toFixed(1)}%`; return `<text x="${55 + index * 155}" y="277" text-anchor="middle" fill="#64645d" font-size="9">${label} · ${price.toFixed(asset === 'loom' ? 0 : 2)}</text>`; }).join('') + '<text x="365" y="297" text-anchor="middle" fill="#66665f" font-size="9">价格区间 (USDT / 距最佳价)</text>';
+  $('#chartDots').innerHTML = chartData.map((level, index) => `<circle data-i="${index}" cx="${x(level.price)}" cy="${y(level.cumulative)}" r="8" fill="transparent" stroke="transparent" tabindex="0"/>`).join('');
   $('#orderRows').innerHTML = data.slice(0, 8).map((level) => `<div class="order-row"><span>${level.price.toFixed(2)}</span><span>${level.quantity}</span><span>${level.cumulative}</span><span class="depth-bg" style="width:${level.cumulative / max * 100}%"></span><span>${level.escrow.toLocaleString(undefined, { maximumFractionDigits: 2 })} USDT</span></div>`).join('');
   $$('#chartDots circle').forEach((dot) => {
     const show = () => {
@@ -377,7 +425,7 @@ function drawVolume(rows, startTime, endTime) {
 
 function renderTimeline() {
   if (!timelineSnapshot) return;
-  const series = timelineSnapshot.assets[asset];
+  const series = timelineSnapshot.assets[timelineAsset];
   const fullStart = Math.min(series.trades[0]?.[0] ?? Infinity, series.bids[0]?.[0] ?? Infinity);
   const fullEnd = Math.max(series.trades[series.trades.length - 1]?.[0] ?? 0, series.bids[series.bids.length - 1]?.[0] ?? 0);
   if (!Number.isFinite(fullStart) || fullEnd < fullStart) return;
@@ -403,7 +451,8 @@ function renderTimeline() {
   $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
   $('#tradeTimeline').style.display = historySeries === 'bid' ? 'none' : 'block';
   $('#bidTimeline').style.display = historySeries === 'trade' ? 'none' : 'block';
-  const titles = { trade: ['NFT 成交成本', '逐笔成交价格与时间对应'], bid: ['NFT 历史挂单', '按历史成交参考价过滤异常挂单'], hybrid: ['成交成本 + 历史挂单', '两类数据共用价格轴和时间轴'] };
+  const marketName = timelineAsset === 'relic' ? 'Relics' : 'Looms';
+  const titles = { trade: [`${marketName} 成交成本`, '逐笔成交价格与时间对应'], bid: [`${marketName} 历史挂单`, '按历史成交参考价过滤异常挂单'], hybrid: [`${marketName} 成交成本 + 挂单`, '两类数据共用价格轴和时间轴'] };
   $('#timelineChartTitle').textContent = titles[historySeries][0];
   $('#timelineChartSubtitle').textContent = titles[historySeries][1];
   $('#timelineChartTitle').previousElementSibling.className = `legend-dot ${historySeries === 'bid' ? 'bid-dot' : 'trade-dot'}`;
@@ -421,7 +470,7 @@ function renderTimeline() {
   $('#visibleEventCount').textContent = `当前范围 ${bids.length.toLocaleString()} 笔 · 已过滤偏差挂单 ${credible.excluded} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
   $('#focusNote').textContent = historyScale === 'focus' ? '挂单仅显示同一时期成交中位价的 35%–175%；悬停查看同一时间点成交、挂单与 VOL' : '价格轴覆盖所选时段全部价格；挂单异常值仍按成交中位价过滤';
-  $('#timelineSnapshot').textContent = `${rangeLabels[historyRange]} · 数据区块 ${timelineSnapshot.indexedBlock.toLocaleString()} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
+  $('#timelineSnapshot').textContent = `${marketName} · ${rangeLabels[historyRange]} · 数据区块 ${timelineSnapshot.indexedBlock.toLocaleString()} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
 function showTimelineTooltip(event) {
@@ -484,6 +533,11 @@ function installTimelineInteractions() {
     $$('[data-history-series]').forEach((item) => item.classList.toggle('active', item === button));
     renderTimeline();
   });
+  $$('[data-timeline-asset]').forEach((button) => button.onclick = () => {
+    timelineAsset = button.dataset.timelineAsset;
+    $$('[data-timeline-asset]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
   $$('[data-history-range]').forEach((button) => button.onclick = () => {
     historyRange = button.dataset.historyRange;
     $$('[data-history-range]').forEach((item) => item.classList.toggle('active', item === button));
@@ -505,6 +559,7 @@ function installTimelineInteractions() {
 function render() {
   updateSummary();
   renderHolders();
+  renderComparison();
   renderChart();
   renderTrades();
   renderTimeline();
