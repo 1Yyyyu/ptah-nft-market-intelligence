@@ -368,7 +368,7 @@ function credibleBids(trades, bids) {
     const before = trades.slice(Math.max(0, low - 40), low);
     const referenceRows = before.length >= 5 ? before.slice(-25) : trades.slice(Math.max(0, low - 10), Math.min(trades.length, low + 15));
     const reference = medianValue(referenceRows.map((row) => row[1]));
-    const absoluteFloor = asset === 'loom' ? 1 : 0.1;
+    const absoluteFloor = timelineAsset === 'loom' ? 1 : 0.1;
     if (bid[1] < absoluteFloor || (reference && (bid[1] < reference * 0.35 || bid[1] > reference * 1.75))) excluded += 1;
     else filtered.push(bid);
   }
