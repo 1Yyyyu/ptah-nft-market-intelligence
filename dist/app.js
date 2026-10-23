@@ -1,6 +1,7 @@
 const snapshot = window.PTAH_SNAPSHOT;
 const marketSnapshot = window.PTAH_MARKET;
 const costSnapshot = window.PTAH_COSTS;
+const timelineSnapshot = window.PTAH_TIMELINE;
 const tradeSnapshot = window.PTAH_TRADES;
 const assets = {
   relic: { ...snapshot.assets.relic, ...marketSnapshot.assets.relic },
@@ -17,6 +18,12 @@ let asset = 'relic';
 let page = 1;
 let range = 10;
 let filter = '';
+let historyMode = 'hybrid';
+let historyRange = 'all';
+let historyScale = 'focus';
+let hoverTime = null;
+let timelineView = null;
+let timelineResizeObserver;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
@@ -204,11 +211,198 @@ function renderTrades() {
   $('#tradeRows').innerHTML = trade.recent.slice(0, 6).map((row) => `<a class="trade-row" href="https://bscscan.com/tx/${row.tx}" target="_blank" rel="noopener"><span><b>#${row.tokenId}</b><small>Bid #${row.bidId}</small></span><strong>${row.price.toFixed(2)} USDT</strong><time>${new Date(row.filledAt).toLocaleTimeString('zh-CN', { hour12: false })}</time></a>`).join('');
 }
 
+function filteredTimelineRows(rows, newest) {
+  if (historyRange === 'all' || !rows.length) return rows;
+  const duration = ({ '24h': 86400, '6h': 21600, '1h': 3600 })[historyRange];
+  return rows.filter((row) => row[0] >= newest - duration);
+}
+
+function quantile(sorted, fraction) {
+  if (!sorted.length) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
+}
+
+function drawTimelineCanvas(canvas, rows, type, sharedDomain) {
+  const context = canvas.getContext('2d');
+  const bounds = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, bounds.width);
+  const height = Math.max(1, bounds.height);
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  const padding = { left: 54, right: 18, top: 18, bottom: 31 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  if (plotWidth <= 0 || plotHeight <= 0 || !rows.length) {
+    context.fillStyle = '#77756d';
+    context.font = '11px sans-serif';
+    context.fillText('该时间范围内暂无记录', padding.left, height / 2);
+    return { points: [], bounds: { ...padding, plotWidth, plotHeight }, domain: sharedDomain || [0, 1] };
+  }
+
+  const sortedPrices = rows.map((row) => row[1]).sort((a, b) => a - b);
+  let minPrice = sharedDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
+  let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices.at(-1));
+  if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
+  const minTime = rows[0][0];
+  const maxTime = Math.max(minTime + 1, rows.at(-1)[0]);
+  const px = (timestamp) => padding.left + (timestamp - minTime) / (maxTime - minTime) * plotWidth;
+  const py = (price) => padding.top + (maxPrice - price) / (maxPrice - minPrice) * plotHeight;
+
+  context.font = '9px sans-serif';
+  context.textAlign = 'right';
+  context.textBaseline = 'middle';
+  for (let index = 0; index <= 4; index += 1) {
+    const y = padding.top + plotHeight * index / 4;
+    const value = maxPrice - (maxPrice - minPrice) * index / 4;
+    context.strokeStyle = '#262721';
+    context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
+    context.fillStyle = '#77756d';
+    context.fillText(value.toFixed(asset === 'loom' ? 0 : 2), padding.left - 8, y);
+  }
+  const ticks = 4;
+  context.textAlign = 'center';
+  context.textBaseline = 'top';
+  for (let index = 0; index <= ticks; index += 1) {
+    const time = minTime + (maxTime - minTime) * index / ticks;
+    const x = padding.left + plotWidth * index / ticks;
+    context.fillStyle = '#77756d';
+    context.fillText(new Date(time * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }), x, height - padding.bottom + 9);
+  }
+
+  if (type === 'trade') {
+    if (historyMode !== 'bubble') {
+      context.strokeStyle = '#d8bd72';
+      context.lineWidth = 1.35;
+      context.beginPath();
+      rows.forEach((row, index) => {
+        const x = px(row[0]); const y = py(row[1]);
+        if (index) context.lineTo(x, y); else context.moveTo(x, y);
+      });
+      context.stroke();
+    }
+    if (historyMode !== 'line') {
+      const stride = Math.max(1, Math.ceil(rows.length / Math.max(1000, plotWidth * 3)));
+      context.fillStyle = '#f2d98e99';
+      for (let index = 0; index < rows.length; index += stride) {
+        context.beginPath(); context.arc(px(rows[index][0]), py(rows[index][1]), historyMode === 'hybrid' ? 1.7 : 2.4, 0, Math.PI * 2); context.fill();
+      }
+    }
+  } else {
+    const quantities = rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b);
+    const q90 = Math.max(1, quantile(quantities, 0.9));
+    rows.forEach((row) => {
+      const status = row[4];
+      context.fillStyle = status === 0 ? '#69b78fb8' : status === 1 ? '#b69555b8' : '#74756f91';
+      const radius = 2.5 + Math.min(8, Math.sqrt(Math.max(0, row[3]) / q90) * 5);
+      context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
+    });
+  }
+  return { points: rows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], minTime, maxTime };
+}
+
+function renderTimeline() {
+  if (!timelineSnapshot) return;
+  const series = timelineSnapshot.assets[asset];
+  const newest = Math.max(series.trades.at(-1)?.[0] ?? 0, series.bids.at(-1)?.[0] ?? 0);
+  const trades = filteredTimelineRows(series.trades, newest);
+  const bids = filteredTimelineRows(series.bids, newest);
+  const tradePrices = trades.map((row) => row[1]);
+  const bidPrices = bids.map((row) => row[1]);
+  const combined = [...tradePrices, ...bidPrices].sort((a, b) => a - b);
+  const commonDomain = $('#sharedScale').checked && combined.length
+    ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined.at(-1)]
+    : null;
+  const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain);
+  const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain);
+  timelineView = { tradeView, bidView, trades, bids };
+  $('#timelineSample').textContent = `${trades.length.toLocaleString()} 笔成交 · ${bids.length.toLocaleString()} 笔挂单`;
+  $('#firstTradePrice').textContent = series.summary.firstPrice === null ? '—' : `${series.summary.firstPrice.toFixed(2)} USDT`;
+  $('#firstTradeAt').textContent = series.summary.firstAt ? new Date(series.summary.firstAt * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#lastTradePrice').textContent = series.summary.lastPrice === null ? '—' : `${series.summary.lastPrice.toFixed(2)} USDT`;
+  $('#lastTradeAt').textContent = series.summary.lastAt ? new Date(series.summary.lastAt * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#allTradeAverage').textContent = series.summary.average === null ? '—' : `${series.summary.average.toFixed(2)} USDT`;
+  $('#allTradeCount').textContent = `${series.summary.tradeCount.toLocaleString()} 笔逐笔成交`;
+  $('#allTradeMedian').textContent = series.summary.median === null ? '—' : `${series.summary.median.toFixed(2)} USDT`;
+  $('#allTradeRange').textContent = `区间 ${series.summary.low?.toFixed(2) ?? '—'} – ${series.summary.high?.toFixed(2) ?? '—'} USDT`;
+  $('#allBidCount').textContent = series.summary.bidCount.toLocaleString();
+  $('#visibleEventCount').textContent = `当前范围 ${bids.length.toLocaleString()} 笔 · ${timelineSnapshot.statusLabels.join(' / ')}`;
+  const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
+  $('#focusNote').textContent = historyScale === 'focus' ? '主要价格区间按 1%–99% 分位显示；悬停图点查看逐笔数据' : '价格轴覆盖所选时段全部价格；悬停图点查看逐笔数据';
+  $('#timelineSnapshot').textContent = `${rangeLabels[historyRange]} · 数据区块 ${timelineSnapshot.indexedBlock.toLocaleString()} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
+}
+
+function showTimelineTooltip(event, type) {
+  if (!timelineView) return;
+  const canvas = event.currentTarget;
+  const view = type === 'trade' ? timelineView.tradeView : timelineView.bidView;
+  const points = view.points;
+  if (!points.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const { left, plotWidth } = view.bounds;
+  const ratio = Math.max(0, Math.min(1, (x - left) / plotWidth));
+  const targetTime = view.minTime + ratio * (view.maxTime - view.minTime);
+  let low = 0; let high = points.length - 1;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (points[mid][0] < targetTime) low = mid + 1; else high = mid;
+  }
+  const candidates = [points[low], points[Math.max(0, low - 1)]];
+  const row = candidates.reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best);
+  const tip = $('#timelineTooltip');
+  tip.style.display = 'block';
+  const boardRect = $('.timeline-board').getBoundingClientRect();
+  tip.style.left = `${Math.min(boardRect.width - 250, Math.max(8, event.clientX - boardRect.left + 12))}px`;
+  tip.style.top = `${Math.max(8, event.clientY - boardRect.top - 28)}px`;
+  if (type === 'trade') {
+    tip.innerHTML = `<time>${new Date(row[0] * 1000).toLocaleString('zh-CN', { hour12: false })}</time><div>Token ID <strong>#${row[2]}</strong></div><div>成交成本 <strong>${row[1].toFixed(2)} USDT</strong></div><small>Bid #${row[3]}</small>`;
+  } else {
+    const status = timelineSnapshot.statusLabels[row[4]] || '未知';
+    tip.innerHTML = `<time>${new Date(row[0] * 1000).toLocaleString('zh-CN', { hour12: false })}</time><div>订单 <strong>#${row[5]}</strong></div><div>挂单价 <strong>${row[1].toFixed(2)} USDT</strong></div><div>数量 <strong>${row[3].toLocaleString()} / ${row[2].toLocaleString()} NFT</strong></div><small>${status}</small>`;
+  }
+}
+
+function installTimelineInteractions() {
+  $('#tradeTimeline').addEventListener('pointermove', (event) => showTimelineTooltip(event, 'trade'));
+  $('#bidTimeline').addEventListener('pointermove', (event) => showTimelineTooltip(event, 'bid'));
+  $$('.timeline-board canvas').forEach((canvas) => canvas.addEventListener('pointerleave', () => { $('#timelineTooltip').style.display = 'none'; }));
+  if ('ResizeObserver' in window) {
+    timelineResizeObserver = new ResizeObserver(() => renderTimeline());
+    timelineResizeObserver.observe($('.timeline-board'));
+  } else window.addEventListener('resize', renderTimeline);
+  $$('[data-history-mode]').forEach((button) => button.onclick = () => {
+    historyMode = button.dataset.historyMode;
+    $$('[data-history-mode]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
+  $$('[data-history-range]').forEach((button) => button.onclick = () => {
+    historyRange = button.dataset.historyRange;
+    $$('[data-history-range]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
+  $$('[data-price-scale]').forEach((button) => button.onclick = () => {
+    historyScale = button.dataset.priceScale;
+    $$('[data-price-scale]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
+  $('#sharedScale').onchange = renderTimeline;
+  $$('[data-layout]').forEach((button) => button.onclick = () => {
+    $('.timeline-board').dataset.layout = button.dataset.layout;
+    $$('[data-layout]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
+}
+
 function render() {
   updateSummary();
   renderHolders();
   renderChart();
   renderTrades();
+  renderTimeline();
 }
 
 function tick() {
@@ -232,6 +426,7 @@ $$('[data-range]').forEach((button) => {
     renderChart();
   };
 });
+installTimelineInteractions();
 $('#holderSearch').oninput = (event) => {
   filter = event.target.value.trim();
   page = 1;

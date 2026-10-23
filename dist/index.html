@@ -90,30 +90,40 @@
         </section>
       </div>
 
-      <section class="panel trade-panel">
+      <section class="panel trade-panel" id="timelinePanel">
         <header class="panel-head">
-          <div><p class="eyebrow">REALIZED TRADES</p><h2>成交均价分析</h2></div>
-          <span class="sample-badge" id="tradeSample">最近成交样本</span>
+          <div><p class="eyebrow">COST &amp; ORDER TIMELINE</p><h2>全历史成本与挂单对比</h2></div>
+          <span class="sample-badge" id="timelineSample">完整历史</span>
         </header>
-        <div class="trade-layout">
-          <div class="trade-analysis">
-            <div class="trade-stats">
-              <article><span>最近 100 笔均价</span><strong id="tradeAvg100">—</strong><small id="tradeAvgChange">—</small></article>
-              <article><span>样本成交均价</span><strong id="tradeAvgSample">—</strong><small id="tradeSampleRange">—</small></article>
-              <article><span>样本中位价</span><strong id="tradeMedian">—</strong><small id="tradeRange">—</small></article>
-              <article><span>最佳买价偏离</span><strong id="bidDeviation">—</strong><small>相对最近 100 笔均价</small></article>
-            </div>
-            <div class="history-chart-wrap">
-              <div class="chart-label">每组实际成交均价</div>
-              <svg id="historyChart" viewBox="0 0 900 250" role="img" aria-label="最近成交均价趋势">
-                <defs><linearGradient id="historyGoldFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cbb16f" stop-opacity=".35"/><stop offset="1" stop-color="#cbb16f" stop-opacity=".015"/></linearGradient></defs>
-                <g id="historyGrid"></g><path id="historyArea" fill="url(#historyGoldFill)"></path><path id="historyLine" fill="none" stroke="#d7bd77" stroke-width="2.5"></path><g id="historyDots"></g><g id="historyAxis"></g>
-              </svg>
-            </div>
-          </div>
-          <aside class="recent-trades"><h3>最近成交</h3><div id="tradeRows"></div></aside>
+        <div class="timeline-controls">
+          <div><span>图表类型</span><div class="mini-segment" role="group" aria-label="图表类型"><button data-history-mode="line">折线</button><button data-history-mode="bubble">气泡</button><button class="active" data-history-mode="hybrid">融合</button></div></div>
+          <div><span>时间范围</span><div class="mini-segment" role="group" aria-label="时间范围"><button class="active" data-history-range="all">全部</button><button data-history-range="24h">24H</button><button data-history-range="6h">6H</button><button data-history-range="1h">1H</button></div></div>
+          <div><span>价格范围</span><div class="mini-segment" role="group" aria-label="价格范围"><button class="active" data-price-scale="focus">主要区间</button><button data-price-scale="all">全部价格</button></div></div>
+          <div><span>图表排列</span><div class="mini-segment" role="group" aria-label="图表排列"><button class="active" data-layout="horizontal">横向</button><button data-layout="vertical">纵向</button></div></div>
+          <label class="scale-toggle"><input type="checkbox" id="sharedScale" checked><span>统一价格轴</span></label>
         </div>
-        <footer class="source-note"><span class="pulse"></span><span id="tradeSnapshot">Ptah 交易历史</span><a href="https://ptah.trade/market" target="_blank" rel="noopener">查看交易历史 ↗</a></footer>
+        <div class="trade-stats timeline-stats">
+          <article><span>初始成交价</span><strong id="firstTradePrice">—</strong><small id="firstTradeAt">—</small></article>
+          <article><span>最新成交价</span><strong id="lastTradePrice">—</strong><small id="lastTradeAt">—</small></article>
+          <article><span>全历史均价</span><strong id="allTradeAverage">—</strong><small id="allTradeCount">—</small></article>
+          <article><span>全历史中位价</span><strong id="allTradeMedian">—</strong><small id="allTradeRange">—</small></article>
+          <article><span>历史挂单</span><strong id="allBidCount">—</strong><small id="visibleEventCount">—</small></article>
+        </div>
+        <div class="timeline-board">
+          <article class="timeline-chart-card">
+            <header><div><span class="legend-dot trade-dot"></span><strong>逐笔 NFT 成交成本</strong></div><small>每个点代表一个 NFT 成交</small></header>
+            <div class="canvas-wrap"><canvas id="tradeTimeline" role="img" aria-label="逐笔 NFT 成交价格历史"></canvas><div class="axis-unit">USDT</div></div>
+          </article>
+          <article class="timeline-chart-card">
+            <header><div><span class="legend-dot bid-dot"></span><strong>历史挂单价格</strong></div><small>气泡大小代表挂单数量 · 颜色代表状态</small></header>
+            <div class="canvas-wrap"><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><div class="axis-unit">USDT</div></div>
+          </article>
+          <div class="timeline-tooltip" id="timelineTooltip"></div>
+        </div>
+        <div class="timeline-legend">
+          <span><i class="trade-line"></i>成交价格</span><span><i class="bid-open"></i>开放挂单</span><span><i class="bid-filled"></i>已成交挂单</span><span><i class="bid-cancelled"></i>已取消挂单</span><em id="focusNote">主要区间按 1%–99% 分位展示，异常价仍保留在完整数据中</em>
+        </div>
+        <footer class="source-note"><span class="pulse"></span><span id="timelineSnapshot">Ptah 完整交易与挂单历史</span><a href="https://ptah.trade/market" target="_blank" rel="noopener">查看交易历史 ↗</a></footer>
       </section>
     </main>
   </div>
@@ -122,6 +132,7 @@
   <script src="./market-data.js"></script>
   <script src="./cost-data.js"></script>
   <script src="./trade-data.js"></script>
+  <script src="./timeline-data.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
