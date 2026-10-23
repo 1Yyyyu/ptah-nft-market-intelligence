@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ptah NFT holders and market depth live dashboard">
+  <title>Ptah Live Dashboard</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./trade.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="https://ptah.trade/" target="_blank" rel="noopener">
+        <span class="eye" aria-hidden="true">𓂀</span><span>PTAH</span><i></i><small>LIVE DATA</small>
+      </a>
+      <div class="status"><span class="pulse"></span><span id="networkText">BNB Chain 快照</span><time id="clock">--:--:--</time></div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">ON-CHAIN INTELLIGENCE · BNB CHAIN</p>
+          <h1>NFT 市场脉搏</h1>
+          <p>追踪前 100 持有者、有效挂单深度、潜在卖盘与实际成交均价。</p>
+        </div>
+        <div class="controls">
+          <div class="segmented" role="group" aria-label="选择资产">
+            <button class="active" data-asset="relic">Relics</button>
+            <button data-asset="loom">Looms</button>
+          </div>
+          <button class="refresh" id="refreshBtn" aria-label="刷新数据">↻ <span>刷新</span></button>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="市场摘要">
+        <article><div class="metric-label">独立持有者 <span>HOLDERS</span></div><strong id="holderCount">4,950</strong><small class="up">链上 ownerOf 汇总</small></article>
+        <article><div class="metric-label">最大供应量 <span>MAX SUPPLY</span></div><strong id="supply">100,000</strong><small id="supplyNote">95,000 公开 + 5,000 储备</small></article>
+        <article><div class="metric-label">最佳买价 <span>BEST BID</span></div><strong id="bestBid">—</strong><small id="marketCapNote">按最佳可执行买价估值</small></article>
+        <article><div class="metric-label">挂单深度 <span>ALL BIDS</span></div><strong id="depthTotal">—</strong><small id="depthNote">按剩余数量 × 挂单价</small></article>
+        <article><div class="metric-label">TOP 10 占比 <span>CONCENTRATION</span></div><strong id="top10">21.7%</strong><small class="good">分布健康</small></article>
+        <article><div class="metric-label">潜在卖盘 <span>SELL SUPPLY</span></div><strong id="sellSupply">—</strong><small id="sellSupplyNote">链上流通存量上限</small></article>
+      </section>
+
+      <div class="grid">
+        <section class="panel holders-panel">
+          <header class="panel-head">
+            <div><p class="eyebrow">OWNERSHIP</p><h2>前 100 持有者</h2></div>
+            <div class="search-wrap"><span>⌕</span><input id="holderSearch" type="search" placeholder="搜索地址" aria-label="搜索持有者地址"></div>
+          </header>
+          <div class="concentration">
+            <div class="ring" id="ring"><span><strong>21.7%</strong><small>TOP 10</small></span></div>
+            <div class="bands">
+              <div><span>Top 1</span><b><i></i></b><strong id="band1">—</strong></div>
+              <div><span>Top 10</span><b><i></i></b><strong id="band10">—</strong></div>
+              <div><span>Top 50</span><b><i></i></b><strong id="band50">—</strong></div>
+              <div><span>Top 100</span><b><i></i></b><strong id="band100">—</strong></div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>钱包地址</th><th>NFT</th><th>占最大供应量</th><th>平均买入成本</th><th>成本覆盖</th></tr></thead>
+              <tbody id="holderRows"></tbody>
+            </table>
+          </div>
+          <footer class="panel-foot"><span id="tableInfo">显示 1–10 / 100</span><div><button id="prevPage" aria-label="上一页">‹</button><span id="pageLabel">1 / 10</span><button id="nextPage" aria-label="下一页">›</button></div></footer>
+        </section>
+
+        <section class="panel depth-panel">
+          <header class="panel-head">
+            <div><p class="eyebrow">MARKET LIQUIDITY</p><h2>订单簿深度</h2></div>
+            <div class="range" role="group" aria-label="价格深度范围"><button data-range="5">-5%</button><button class="active" data-range="10">-10%</button><button data-range="20">-20%</button></div>
+          </header>
+
+          <div class="depth-meta"><div><span>最佳买价</span><strong id="depthBest">—</strong></div><div><span title="按当前价格范围内剩余 NFT 数量加权计算">区间中位买价 ⓘ</span><strong id="medianBid">—</strong></div><div><span>区间加权均价</span><strong id="weightedAvg">—</strong></div><div><span>当前市值 / FDV</span><strong id="marketCap">—</strong></div><div><span>全历史均价 / 回本价</span><strong id="costLine">—</strong></div></div>
+          <div class="chart-wrap">
+            <div class="chart-label">累计 NFT 数量</div>
+            <svg id="depthChart" viewBox="0 0 720 300" role="img" aria-label="累计买单深度图">
+              <defs><linearGradient id="goldFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cbb16f" stop-opacity=".38"/><stop offset="1" stop-color="#cbb16f" stop-opacity=".015"/></linearGradient></defs>
+              <g id="gridLines"></g><path id="areaPath" fill="url(#goldFill)"></path><path id="linePath" fill="none" stroke="#d7bd77" stroke-width="2"></path><g id="chartDots"></g><g id="axisLabels"></g>
+            </svg>
+            <div class="tooltip" id="tooltip"><span>价格</span><strong>—</strong><small>—</small></div>
+          </div>
+
+          <div class="orderbook">
+            <div class="book-head"><span>价格 (USDT)</span><span>数量</span><span>累计</span><span>深度</span></div>
+            <div id="orderRows"></div>
+          </div>
+          <footer class="source-note"><span class="pulse"></span><span id="marketSnapshot">有效挂单快照</span><i></i><span>Market <code>0xfaD7…c6EfC</code></span><a href="https://ptah.trade/market" target="_blank" rel="noopener">打开市场 ↗</a></footer>
+        </section>
+      </div>
+
+      <section class="panel trade-panel">
+        <header class="panel-head">
+          <div><p class="eyebrow">REALIZED TRADES</p><h2>成交均价分析</h2></div>
+          <span class="sample-badge" id="tradeSample">最近成交样本</span>
+        </header>
+        <div class="trade-layout">
+          <div class="trade-analysis">
+            <div class="trade-stats">
+              <article><span>最近 100 笔均价</span><strong id="tradeAvg100">—</strong><small id="tradeAvgChange">—</small></article>
+              <article><span>样本成交均价</span><strong id="tradeAvgSample">—</strong><small id="tradeSampleRange">—</small></article>
+              <article><span>样本中位价</span><strong id="tradeMedian">—</strong><small id="tradeRange">—</small></article>
+              <article><span>最佳买价偏离</span><strong id="bidDeviation">—</strong><small>相对最近 100 笔均价</small></article>
+            </div>
+            <div class="history-chart-wrap">
+              <div class="chart-label">每组实际成交均价</div>
+              <svg id="historyChart" viewBox="0 0 900 250" role="img" aria-label="最近成交均价趋势">
+                <defs><linearGradient id="historyGoldFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#cbb16f" stop-opacity=".35"/><stop offset="1" stop-color="#cbb16f" stop-opacity=".015"/></linearGradient></defs>
+                <g id="historyGrid"></g><path id="historyArea" fill="url(#historyGoldFill)"></path><path id="historyLine" fill="none" stroke="#d7bd77" stroke-width="2.5"></path><g id="historyDots"></g><g id="historyAxis"></g>
+              </svg>
+            </div>
+          </div>
+          <aside class="recent-trades"><h3>最近成交</h3><div id="tradeRows"></div></aside>
+        </div>
+        <footer class="source-note"><span class="pulse"></span><span id="tradeSnapshot">Ptah 交易历史</span><a href="https://ptah.trade/market" target="_blank" rel="noopener">查看交易历史 ↗</a></footer>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast">数据已刷新</div>
+  <script src="./holders-data.js"></script>
+  <script src="./market-data.js"></script>
+  <script src="./cost-data.js"></script>
+  <script src="./trade-data.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
