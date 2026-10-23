@@ -21,6 +21,8 @@ let filter = '';
 let historyMode = 'hybrid';
 let historyRange = 'all';
 let historyScale = 'focus';
+let historySeries = 'trade';
+let timelineCursorRatio = null;
 let hoverTime = null;
 let timelineView = null;
 let timelineResizeObserver;
@@ -211,18 +213,12 @@ function renderTrades() {
   $('#tradeRows').innerHTML = trade.recent.slice(0, 6).map((row) => `<a class="trade-row" href="https://bscscan.com/tx/${row.tx}" target="_blank" rel="noopener"><span><b>#${row.tokenId}</b><small>Bid #${row.bidId}</small></span><strong>${row.price.toFixed(2)} USDT</strong><time>${new Date(row.filledAt).toLocaleTimeString('zh-CN', { hour12: false })}</time></a>`).join('');
 }
 
-function filteredTimelineRows(rows, newest) {
-  if (historyRange === 'all' || !rows.length) return rows;
-  const duration = ({ '24h': 86400, '6h': 21600, '1h': 3600 })[historyRange];
-  return rows.filter((row) => row[0] >= newest - duration);
-}
-
 function quantile(sorted, fraction) {
   if (!sorted.length) return 0;
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
 }
 
-function drawTimelineCanvas(canvas, rows, type, sharedDomain) {
+function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime) {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -233,23 +229,22 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain) {
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  const padding = { left: 54, right: 18, top: 18, bottom: 31 };
+  const padding = { left: 54, right: 18, top: 14, bottom: 31 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
-  if (plotWidth <= 0 || plotHeight <= 0 || !rows.length) {
+  if (plotWidth <= 0 || plotHeight <= 0) {
     context.fillStyle = '#77756d';
     context.font = '11px sans-serif';
     context.fillText('该时间范围内暂无记录', padding.left, height / 2);
-    return { points: [], bounds: { ...padding, plotWidth, plotHeight }, domain: sharedDomain || [0, 1] };
+    return { points: [], bounds: { ...padding, plotWidth, plotHeight }, domain: sharedDomain || [0, 1], startTime, endTime };
   }
 
   const sortedPrices = rows.map((row) => row[1]).sort((a, b) => a - b);
   let minPrice = sharedDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
   let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices.at(-1));
+  if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) { minPrice = 0; maxPrice = 1; }
   if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
-  const minTime = rows[0][0];
-  const maxTime = Math.max(minTime + 1, rows.at(-1)[0]);
-  const px = (timestamp) => padding.left + (timestamp - minTime) / (maxTime - minTime) * plotWidth;
+  const px = (timestamp) => padding.left + (timestamp - startTime) / Math.max(1, endTime - startTime) * plotWidth;
   const py = (price) => padding.top + (maxPrice - price) / (maxPrice - minPrice) * plotHeight;
 
   context.font = '9px sans-serif';
@@ -266,15 +261,17 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain) {
   const ticks = 4;
   context.textAlign = 'center';
   context.textBaseline = 'top';
+  const axisLabels = [];
   for (let index = 0; index <= ticks; index += 1) {
-    const time = minTime + (maxTime - minTime) * index / ticks;
+    const time = startTime + (endTime - startTime) * index / ticks;
     const x = padding.left + plotWidth * index / ticks;
+    axisLabels.push({ time, x });
     context.fillStyle = '#77756d';
     context.fillText(new Date(time * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }), x, height - padding.bottom + 9);
   }
 
   if (type === 'trade') {
-    if (historyMode !== 'bubble') {
+    if (historyMode !== 'bubble' && rows.length) {
       context.strokeStyle = '#d8bd72';
       context.lineWidth = 1.35;
       context.beginPath();
@@ -301,25 +298,112 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain) {
       context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
     });
   }
-  return { points: rows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], minTime, maxTime };
+  return { points: rows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], startTime, endTime, axisLabels };
+}
+
+function medianValue(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function credibleBids(trades, bids) {
+  const filtered = [];
+  let excluded = 0;
+  for (const bid of bids) {
+    let low = 0; let high = trades.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (trades[middle][0] <= bid[0]) low = middle + 1; else high = middle;
+    }
+    const before = trades.slice(Math.max(0, low - 40), low);
+    const referenceRows = before.length >= 5 ? before.slice(-25) : trades.slice(Math.max(0, low - 10), Math.min(trades.length, low + 15));
+    const reference = medianValue(referenceRows.map((row) => row[1]));
+    const absoluteFloor = asset === 'loom' ? 1 : 0.1;
+    if (bid[1] < absoluteFloor || (reference && (bid[1] < reference * 0.35 || bid[1] > reference * 1.75))) excluded += 1;
+    else filtered.push(bid);
+  }
+  return { rows: filtered, excluded };
+}
+
+function drawVolume(rows, startTime, endTime) {
+  const canvas = $('#volumeTimeline');
+  const context = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, rect.width); const height = Math.max(1, rect.height);
+  canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height);
+  const pad = { left: 54, right: 18, top: 10, bottom: 30 };
+  const plotWidth = width - pad.left - pad.right; const plotHeight = height - pad.top - pad.bottom;
+  const bucketCount = Math.max(24, Math.min(100, Math.floor(plotWidth / 8)));
+  const buckets = Array.from({ length: bucketCount }, () => ({ count: 0, usdt: 0 }));
+  const duration = Math.max(1, endTime - startTime);
+  for (const row of rows) {
+    const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((row[0] - startTime) / duration * bucketCount)));
+    buckets[index].count += 1; buckets[index].usdt += row[1];
+  }
+  const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  context.strokeStyle = '#262721'; context.fillStyle = '#69b78f'; context.font = '9px sans-serif';
+  context.textAlign = 'right'; context.textBaseline = 'middle';
+  for (let index = 0; index <= 2; index += 1) {
+    const y = pad.top + plotHeight * index / 2;
+    context.beginPath(); context.moveTo(pad.left, y); context.lineTo(width - pad.right, y); context.stroke();
+    context.fillStyle = '#77756d'; context.fillText(Math.round(maxCount * (2 - index) / 2), pad.left - 8, y);
+  }
+  const gap = 1;
+  const barWidth = Math.max(1, plotWidth / bucketCount - gap);
+  buckets.forEach((bucket, index) => {
+    const barHeight = bucket.count / maxCount * plotHeight;
+    const x = pad.left + index * plotWidth / bucketCount;
+    context.fillStyle = bucket.count ? '#76ad8d' : '#38463c';
+    context.fillRect(x, pad.top + plotHeight - barHeight, barWidth, barHeight);
+  });
+  context.fillStyle = '#77756d'; context.textAlign = 'center'; context.textBaseline = 'top';
+  const axisLabels = [];
+  for (let index = 0; index <= 4; index += 1) {
+    const time = startTime + duration * index / 4;
+    const x = pad.left + plotWidth * index / 4;
+    axisLabels.push({ time, x });
+    context.fillText(new Date(time * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }), x, height - pad.bottom + 8);
+  }
+  const totalUsdt = rows.reduce((sum, row) => sum + row[1], 0);
+  $('#volumeNow').textContent = `${rows.length.toLocaleString()} NFT · ${totalUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
+  $('#volumeRate').textContent = `${buckets.at(-1).count} NFT · ${buckets.at(-1).usdt.toFixed(2)} USDT`;
+  return { buckets, startTime, endTime, pad, plotWidth, plotHeight, bounds: { width, height } };
 }
 
 function renderTimeline() {
   if (!timelineSnapshot) return;
   const series = timelineSnapshot.assets[asset];
-  const newest = Math.max(series.trades.at(-1)?.[0] ?? 0, series.bids.at(-1)?.[0] ?? 0);
-  const trades = filteredTimelineRows(series.trades, newest);
-  const bids = filteredTimelineRows(series.bids, newest);
+  const fullStart = Math.min(series.trades[0]?.[0] ?? Infinity, series.bids[0]?.[0] ?? Infinity);
+  const fullEnd = Math.max(series.trades.at(-1)?.[0] ?? 0, series.bids.at(-1)?.[0] ?? 0);
+  if (!Number.isFinite(fullStart) || fullEnd < fullStart) return;
+  const duration = ({ '24h': 86400, '6h': 21600, '1h': 3600 })[historyRange];
+  const startTime = historyRange === 'all' ? fullStart : Math.max(fullStart, fullEnd - duration);
+  const endTime = fullEnd;
+  const trades = series.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
+  const allWindowBids = series.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
+  const credible = credibleBids(series.trades, allWindowBids);
+  const bids = credible.rows;
   const tradePrices = trades.map((row) => row[1]);
   const bidPrices = bids.map((row) => row[1]);
   const combined = [...tradePrices, ...bidPrices].sort((a, b) => a - b);
   const commonDomain = $('#sharedScale').checked && combined.length
     ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined.at(-1)]
     : null;
-  const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain);
-  const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain);
-  timelineView = { tradeView, bidView, trades, bids };
-  $('#timelineSample').textContent = `${trades.length.toLocaleString()} 笔成交 · ${bids.length.toLocaleString()} 笔挂单`;
+  const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain, startTime, endTime);
+  const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain, startTime, endTime);
+  const volumeView = drawVolume(trades, startTime, endTime);
+  $('#tradeTimeline').style.display = historySeries === 'bid' ? 'none' : 'block';
+  $('#bidTimeline').style.display = historySeries === 'trade' ? 'none' : 'block';
+  const titles = { trade: ['NFT 成交成本', '逐笔成交价格与时间对应'], bid: ['NFT 历史挂单', '按历史成交参考价过滤异常挂单'], hybrid: ['成交成本 + 历史挂单', '两类数据共用价格轴和时间轴'] };
+  $('#timelineChartTitle').textContent = titles[historySeries][0];
+  $('#timelineChartSubtitle').textContent = titles[historySeries][1];
+  $('#timelineChartTitle').previousElementSibling.className = `legend-dot ${historySeries === 'bid' ? 'bid-dot' : 'trade-dot'}`;
+  timelineView = { tradeView, bidView, volumeView, trades, bids, startTime, endTime };
+  $('#timelineSample').textContent = `${trades.length.toLocaleString()} 笔成交 · ${bids.length.toLocaleString()} 笔有效挂单`;
   $('#firstTradePrice').textContent = series.summary.firstPrice === null ? '—' : `${series.summary.firstPrice.toFixed(2)} USDT`;
   $('#firstTradeAt').textContent = series.summary.firstAt ? new Date(series.summary.firstAt * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
   $('#lastTradePrice').textContent = series.summary.lastPrice === null ? '—' : `${series.summary.lastPrice.toFixed(2)} USDT`;
@@ -329,47 +413,58 @@ function renderTimeline() {
   $('#allTradeMedian').textContent = series.summary.median === null ? '—' : `${series.summary.median.toFixed(2)} USDT`;
   $('#allTradeRange').textContent = `区间 ${series.summary.low?.toFixed(2) ?? '—'} – ${series.summary.high?.toFixed(2) ?? '—'} USDT`;
   $('#allBidCount').textContent = series.summary.bidCount.toLocaleString();
-  $('#visibleEventCount').textContent = `当前范围 ${bids.length.toLocaleString()} 笔 · ${timelineSnapshot.statusLabels.join(' / ')}`;
+  $('#visibleEventCount').textContent = `当前范围 ${bids.length.toLocaleString()} 笔 · 已过滤偏差挂单 ${credible.excluded} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = historyScale === 'focus' ? '主要价格区间按 1%–99% 分位显示；悬停图点查看逐笔数据' : '价格轴覆盖所选时段全部价格；悬停图点查看逐笔数据';
+  $('#focusNote').textContent = historyScale === 'focus' ? '挂单仅显示同一时期成交中位价的 35%–175%；悬停查看同一时间点成交、挂单与 VOL' : '价格轴覆盖所选时段全部价格；挂单异常值仍按成交中位价过滤';
   $('#timelineSnapshot').textContent = `${rangeLabels[historyRange]} · 数据区块 ${timelineSnapshot.indexedBlock.toLocaleString()} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
-function showTimelineTooltip(event, type) {
+function showTimelineTooltip(event) {
   if (!timelineView) return;
   const canvas = event.currentTarget;
-  const view = type === 'trade' ? timelineView.tradeView : timelineView.bidView;
-  const points = view.points;
-  if (!points.length) return;
   const rect = canvas.getBoundingClientRect();
   const x = event.clientX - rect.left;
-  const { left, plotWidth } = view.bounds;
+  const { left, plotWidth } = timelineView.tradeView.bounds;
   const ratio = Math.max(0, Math.min(1, (x - left) / plotWidth));
-  const targetTime = view.minTime + ratio * (view.maxTime - view.minTime);
-  let low = 0; let high = points.length - 1;
+  timelineCursorRatio = ratio;
+  const targetTime = timelineView.startTime + ratio * (timelineView.endTime - timelineView.startTime);
+  let low = 0; let high = timelineView.trades.length - 1;
   while (low < high) {
     const mid = (low + high) >>> 1;
-    if (points[mid][0] < targetTime) low = mid + 1; else high = mid;
+    if (timelineView.trades[mid][0] < targetTime) low = mid + 1; else high = mid;
   }
-  const candidates = [points[low], points[Math.max(0, low - 1)]];
-  const row = candidates.reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best);
+  const tradeCandidates = timelineView.trades.length ? [timelineView.trades[low], timelineView.trades[Math.max(0, low - 1)]].filter(Boolean) : [];
+  const nearestTrade = tradeCandidates.length ? tradeCandidates.reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best) : null;
+  const findNearest = (rows) => {
+    if (!rows.length) return null;
+    let leftIndex = 0; let rightIndex = rows.length - 1;
+    while (leftIndex < rightIndex) { const mid = (leftIndex + rightIndex) >>> 1; if (rows[mid][0] < targetTime) leftIndex = mid + 1; else rightIndex = mid; }
+    return [rows[leftIndex], rows[Math.max(0, leftIndex - 1)]].filter(Boolean).reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best);
+  };
+  const nearestBid = findNearest(timelineView.bids);
+  const bucketIndex = Math.max(0, Math.min(timelineView.volumeView.buckets.length - 1, Math.floor(ratio * timelineView.volumeView.buckets.length)));
+  const bucket = timelineView.volumeView.buckets[bucketIndex];
   const tip = $('#timelineTooltip');
   tip.style.display = 'block';
   const boardRect = $('.timeline-board').getBoundingClientRect();
   tip.style.left = `${Math.min(boardRect.width - 250, Math.max(8, event.clientX - boardRect.left + 12))}px`;
   tip.style.top = `${Math.max(8, event.clientY - boardRect.top - 28)}px`;
-  if (type === 'trade') {
-    tip.innerHTML = `<time>${new Date(row[0] * 1000).toLocaleString('zh-CN', { hour12: false })}</time><div>Token ID <strong>#${row[2]}</strong></div><div>成交成本 <strong>${row[1].toFixed(2)} USDT</strong></div><small>Bid #${row[3]}</small>`;
-  } else {
-    const status = timelineSnapshot.statusLabels[row[4]] || '未知';
-    tip.innerHTML = `<time>${new Date(row[0] * 1000).toLocaleString('zh-CN', { hour12: false })}</time><div>订单 <strong>#${row[5]}</strong></div><div>挂单价 <strong>${row[1].toFixed(2)} USDT</strong></div><div>数量 <strong>${row[3].toLocaleString()} / ${row[2].toLocaleString()} NFT</strong></div><small>${status}</small>`;
-  }
+  const closeTo = (row) => row && Math.abs(row[0] - targetTime) <= Math.max(3600, (timelineView.endTime - timelineView.startTime) / 70);
+  const tradeInfo = closeTo(nearestTrade) ? `<div>最近成交成本 <strong>${nearestTrade[1].toFixed(2)} USDT · #${nearestTrade[2]}</strong></div>` : '<div>最近成交成本 <strong>该时间点附近无成交</strong></div>';
+  const bidInfo = closeTo(nearestBid) ? `<div>最近挂单 <strong>${nearestBid[1].toFixed(2)} USDT · ${nearestBid[3]} NFT</strong></div>` : '<div>最近挂单 <strong>该时间点附近无挂单</strong></div>';
+  tip.innerHTML = `<time>${new Date(targetTime * 1000).toLocaleString('zh-CN', { hour12: false })}</time>${tradeInfo}${bidInfo}<div>VOL <strong>${bucket.count} NFT · ${bucket.usdt.toFixed(2)} USDT</strong></div>`;
+  const plotLeft = timelineView.tradeView.bounds.left;
+  const cursorX = plotLeft + ratio * timelineView.tradeView.bounds.plotWidth;
+  const volumeCursorX = timelineView.volumeView.pad.left + ratio * timelineView.volumeView.plotWidth;
+  $$('.timeline-main-wrap .timeline-cursor').forEach((cursor) => { cursor.style.left = `${cursorX}px`; cursor.classList.add('visible'); });
+  $$('.volume-card .timeline-cursor').forEach((cursor) => { cursor.style.left = `${volumeCursorX}px`; cursor.classList.add('visible'); });
 }
 
 function installTimelineInteractions() {
-  $('#tradeTimeline').addEventListener('pointermove', (event) => showTimelineTooltip(event, 'trade'));
-  $('#bidTimeline').addEventListener('pointermove', (event) => showTimelineTooltip(event, 'bid'));
-  $$('.timeline-board canvas').forEach((canvas) => canvas.addEventListener('pointerleave', () => { $('#timelineTooltip').style.display = 'none'; }));
+  $('.timeline-main-wrap').addEventListener('pointermove', showTimelineTooltip);
+  $('.timeline-main-wrap').addEventListener('pointerleave', () => { $('#timelineTooltip').style.display = 'none'; $$('.timeline-cursor').forEach((cursor) => cursor.classList.remove('visible')); });
+  $('#volumeTimeline').addEventListener('pointermove', showTimelineTooltip);
+  $('#volumeTimeline').addEventListener('pointerleave', () => { $('#timelineTooltip').style.display = 'none'; $$('.timeline-cursor').forEach((cursor) => cursor.classList.remove('visible')); });
   if ('ResizeObserver' in window) {
     timelineResizeObserver = new ResizeObserver(() => renderTimeline());
     timelineResizeObserver.observe($('.timeline-board'));
@@ -377,6 +472,11 @@ function installTimelineInteractions() {
   $$('[data-history-mode]').forEach((button) => button.onclick = () => {
     historyMode = button.dataset.historyMode;
     $$('[data-history-mode]').forEach((item) => item.classList.toggle('active', item === button));
+    renderTimeline();
+  });
+  $$('[data-history-series]').forEach((button) => button.onclick = () => {
+    historySeries = button.dataset.historySeries;
+    $$('[data-history-series]').forEach((item) => item.classList.toggle('active', item === button));
     renderTimeline();
   });
   $$('[data-history-range]').forEach((button) => button.onclick = () => {

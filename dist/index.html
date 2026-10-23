@@ -96,6 +96,7 @@
           <span class="sample-badge" id="timelineSample">完整历史</span>
         </header>
         <div class="timeline-controls">
+          <div><span>主视图</span><div class="mini-segment" role="group" aria-label="主视图"><button class="active" data-history-series="trade">NFT 成交成本</button><button data-history-series="bid">NFT 挂单</button><button data-history-series="hybrid">二者融合</button></div></div>
           <div><span>图表类型</span><div class="mini-segment" role="group" aria-label="图表类型"><button data-history-mode="line">折线</button><button data-history-mode="bubble">气泡</button><button class="active" data-history-mode="hybrid">融合</button></div></div>
           <div><span>时间范围</span><div class="mini-segment" role="group" aria-label="时间范围"><button class="active" data-history-range="all">全部</button><button data-history-range="24h">24H</button><button data-history-range="6h">6H</button><button data-history-range="1h">1H</button></div></div>
           <div><span>价格范围</span><div class="mini-segment" role="group" aria-label="价格范围"><button class="active" data-price-scale="focus">主要区间</button><button data-price-scale="all">全部价格</button></div></div>
@@ -110,13 +111,14 @@
           <article><span>历史挂单</span><strong id="allBidCount">—</strong><small id="visibleEventCount">—</small></article>
         </div>
         <div class="timeline-board">
-          <article class="timeline-chart-card">
-            <header><div><span class="legend-dot trade-dot"></span><strong>逐笔 NFT 成交成本</strong></div><small>每个点代表一个 NFT 成交</small></header>
-            <div class="canvas-wrap"><canvas id="tradeTimeline" role="img" aria-label="逐笔 NFT 成交价格历史"></canvas><div class="axis-unit">USDT</div></div>
+          <article class="timeline-chart-card timeline-main-card">
+            <header><div><span class="legend-dot trade-dot"></span><strong id="timelineChartTitle">NFT 成交成本</strong></div><small id="timelineChartSubtitle">逐笔成交价格与时间对应</small></header>
+            <div class="canvas-wrap timeline-main-wrap"><canvas id="tradeTimeline" role="img" aria-label="逐笔 NFT 成交价格历史"></canvas><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">USDT</div></div>
           </article>
-          <article class="timeline-chart-card">
-            <header><div><span class="legend-dot bid-dot"></span><strong>历史挂单价格</strong></div><small>气泡大小代表挂单数量 · 颜色代表状态</small></header>
-            <div class="canvas-wrap"><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><div class="axis-unit">USDT</div></div>
+          <article class="timeline-chart-card volume-card">
+            <header><div><span class="legend-dot volume-dot"></span><strong>实时成交量 <em>VOL</em></strong></div><small id="volumeSubtitle">按时间桶统计成交 NFT 数量</small></header>
+            <div class="canvas-wrap volume-wrap"><canvas id="volumeTimeline" role="img" aria-label="实时成交量 VOL"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">NFT / 桶</div></div>
+            <div class="volume-readout"><strong id="volumeNow">—</strong><span>当前窗口成交量</span><strong id="volumeRate">—</strong><span>最近时间桶</span></div>
           </article>
           <div class="timeline-tooltip" id="timelineTooltip"></div>
         </div>
