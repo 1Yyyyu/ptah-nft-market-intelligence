@@ -241,7 +241,7 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime
 
   const sortedPrices = rows.map((row) => row[1]).sort((a, b) => a - b);
   let minPrice = sharedDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
-  let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices.at(-1));
+  let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices[sortedPrices.length - 1]);
   if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) { minPrice = 0; maxPrice = 1; }
   if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
   const px = (timestamp) => padding.left + (timestamp - startTime) / Math.max(1, endTime - startTime) * plotWidth;
@@ -370,7 +370,8 @@ function drawVolume(rows, startTime, endTime) {
   }
   const totalUsdt = rows.reduce((sum, row) => sum + row[1], 0);
   $('#volumeNow').textContent = `${rows.length.toLocaleString()} NFT · ${totalUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
-  $('#volumeRate').textContent = `${buckets.at(-1).count} NFT · ${buckets.at(-1).usdt.toFixed(2)} USDT`;
+  const latestBucket = buckets[buckets.length - 1];
+  $('#volumeRate').textContent = `${latestBucket.count} NFT · ${latestBucket.usdt.toFixed(2)} USDT`;
   return { buckets, startTime, endTime, pad, plotWidth, plotHeight, bounds: { width, height } };
 }
 
@@ -378,7 +379,7 @@ function renderTimeline() {
   if (!timelineSnapshot) return;
   const series = timelineSnapshot.assets[asset];
   const fullStart = Math.min(series.trades[0]?.[0] ?? Infinity, series.bids[0]?.[0] ?? Infinity);
-  const fullEnd = Math.max(series.trades.at(-1)?.[0] ?? 0, series.bids.at(-1)?.[0] ?? 0);
+  const fullEnd = Math.max(series.trades[series.trades.length - 1]?.[0] ?? 0, series.bids[series.bids.length - 1]?.[0] ?? 0);
   if (!Number.isFinite(fullStart) || fullEnd < fullStart) return;
   const duration = ({ '24h': 86400, '6h': 21600, '1h': 3600 })[historyRange];
   const startTime = historyRange === 'all' ? fullStart : Math.max(fullStart, fullEnd - duration);
@@ -391,7 +392,7 @@ function renderTimeline() {
   const bidPrices = bids.map((row) => row[1]);
   const combined = [...tradePrices, ...bidPrices].sort((a, b) => a - b);
   const commonDomain = $('#sharedScale').checked && combined.length
-    ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined.at(-1)]
+    ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : null;
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain, startTime, endTime);
   const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain, startTime, endTime);
