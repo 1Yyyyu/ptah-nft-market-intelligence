@@ -22,7 +22,7 @@ let historyMode = 'hybrid';
 let historyRange = 'all';
 let historyScale = 'focus';
 let historySeries = 'trade';
-let timelineAsset = 'relic';
+let timelineAsset = 'all';
 let timelineCursorRatio = null;
 let hoverTime = null;
 let timelineView = null;
@@ -263,7 +263,20 @@ function quantile(sorted, fraction) {
   return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
 }
 
-function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime) {
+function priceRows(rows) {
+  return rows.filter((row) => Number.isFinite(row[1]) && row[1] > 0);
+}
+
+function trimmedRows(rows, low = 0.01, high = 0.99) {
+  const valid = priceRows(rows);
+  if (valid.length < 8) return valid;
+  const values = valid.map((row) => row[1]).sort((a, b) => a - b);
+  const floor = quantile(values, low);
+  const ceiling = quantile(values, high);
+  return valid.filter((row) => row[1] >= floor && row[1] <= ceiling);
+}
+
+function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -284,24 +297,33 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime
     return { points: [], bounds: { ...padding, plotWidth, plotHeight }, domain: sharedDomain || [0, 1], startTime, endTime };
   }
 
-  const sortedPrices = rows.map((row) => row[1]).sort((a, b) => a - b);
+  const allRows = lineSeries.flatMap((series) => series.rows);
+  const sortedPrices = allRows.map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
   let minPrice = sharedDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
   let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices[sortedPrices.length - 1]);
-  if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) { minPrice = 0; maxPrice = 1; }
+  if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice) || minPrice <= 0) { minPrice = 0.01; maxPrice = 1; }
   if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
+  const logMin = Math.log10(minPrice); const logMax = Math.log10(maxPrice);
   const px = (timestamp) => padding.left + (timestamp - startTime) / Math.max(1, endTime - startTime) * plotWidth;
-  const py = (price) => padding.top + (maxPrice - price) / (maxPrice - minPrice) * plotHeight;
+  const py = (price) => {
+    const value = scaleType === 'log' ? Math.log10(Math.max(minPrice, price)) : price;
+    const top = scaleType === 'log' ? logMax : maxPrice;
+    const bottom = scaleType === 'log' ? logMin : minPrice;
+    return padding.top + (top - value) / Math.max(0.000001, top - bottom) * plotHeight;
+  };
 
   context.font = '9px sans-serif';
   context.textAlign = 'right';
   context.textBaseline = 'middle';
   for (let index = 0; index <= 4; index += 1) {
     const y = padding.top + plotHeight * index / 4;
-    const value = maxPrice - (maxPrice - minPrice) * index / 4;
+    const value = scaleType === 'log'
+      ? Math.pow(10, logMax - (logMax - logMin) * index / 4)
+      : maxPrice - (maxPrice - minPrice) * index / 4;
     context.strokeStyle = '#262721';
     context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
     context.fillStyle = '#77756d';
-    context.fillText(value.toFixed(timelineAsset === 'loom' ? 0 : 2), padding.left - 8, y);
+    context.fillText(value >= 100 ? value.toFixed(0) : value.toFixed(2), padding.left - 8, y);
   }
   const ticks = 4;
   context.textAlign = 'center';
@@ -315,35 +337,29 @@ function drawTimelineCanvas(canvas, rows, type, sharedDomain, startTime, endTime
     context.fillText(new Date(time * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }), x, height - padding.bottom + 9);
   }
 
-  if (type === 'trade') {
-    if (historyMode !== 'bubble' && rows.length) {
-      context.strokeStyle = '#d8bd72';
-      context.lineWidth = 1.35;
+  lineSeries.forEach((series) => {
+    const rows = series.rows;
+    if (!rows.length) return;
+    context.strokeStyle = series.color;
+    context.fillStyle = series.fill || series.color;
+    context.lineWidth = series.width || 1.25;
+    if (series.kind === 'trade' && historyMode !== 'bubble') {
       context.beginPath();
-      rows.forEach((row, index) => {
-        const x = px(row[0]); const y = py(row[1]);
-        if (index) context.lineTo(x, y); else context.moveTo(x, y);
-      });
+      rows.forEach((row, index) => { const x = px(row[0]); const y = py(row[1]); if (index) context.lineTo(x, y); else context.moveTo(x, y); });
       context.stroke();
     }
-    if (historyMode !== 'line') {
-      const stride = Math.max(1, Math.ceil(rows.length / Math.max(1000, plotWidth * 3)));
-      context.fillStyle = '#f2d98e99';
+    if (historyMode !== 'line' || series.kind === 'bid') {
+      const quantities = series.kind === 'bid' ? rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b) : [];
+      const q90 = Math.max(1, quantile(quantities, 0.9));
+      const stride = Math.max(1, Math.ceil(rows.length / Math.max(900, plotWidth * 2)));
       for (let index = 0; index < rows.length; index += stride) {
-        context.beginPath(); context.arc(px(rows[index][0]), py(rows[index][1]), historyMode === 'hybrid' ? 1.7 : 2.4, 0, Math.PI * 2); context.fill();
+        const row = rows[index];
+        const radius = series.kind === 'bid' ? 2.2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4) : (historyMode === 'hybrid' ? 1.5 : 2.2);
+        context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
       }
     }
-  } else {
-    const quantities = rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b);
-    const q90 = Math.max(1, quantile(quantities, 0.9));
-    rows.forEach((row) => {
-      const status = row[4];
-      context.fillStyle = status === 0 ? '#69b78fb8' : status === 1 ? '#b69555b8' : '#74756f91';
-      const radius = 2.5 + Math.min(8, Math.sqrt(Math.max(0, row[3]) / q90) * 5);
-      context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
-    });
-  }
-  return { points: rows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], startTime, endTime, axisLabels };
+  });
+  return { points: allRows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], startTime, endTime, axisLabels, scaleType };
 }
 
 function medianValue(values) {
@@ -365,7 +381,7 @@ function credibleBids(trades, bids) {
     const before = trades.slice(Math.max(0, low - 40), low);
     const referenceRows = before.length >= 5 ? before.slice(-25) : trades.slice(Math.max(0, low - 10), Math.min(trades.length, low + 15));
     const reference = medianValue(referenceRows.map((row) => row[1]));
-    const absoluteFloor = timelineAsset === 'loom' ? 1 : 0.1;
+    const absoluteFloor = 0.1;
     if (bid[1] < absoluteFloor || (reference && (bid[1] < reference * 0.35 || bid[1] > reference * 1.75))) excluded += 1;
     else filtered.push(bid);
   }
@@ -390,6 +406,10 @@ function drawVolume(rows, startTime, endTime) {
     buckets[index].count += 1; buckets[index].usdt += row[1];
   }
   const maxCount = Math.max(1, ...buckets.map((bucket) => bucket.count));
+  const movingAverage = buckets.map((_, index) => {
+    const window = buckets.slice(Math.max(0, index - 3), index + 1);
+    return window.reduce((sum, bucket) => sum + bucket.count, 0) / window.length;
+  });
   context.strokeStyle = '#262721'; context.fillStyle = '#69b78f'; context.font = '9px sans-serif';
   context.textAlign = 'right'; context.textBaseline = 'middle';
   for (let index = 0; index <= 2; index += 1) {
@@ -405,6 +425,13 @@ function drawVolume(rows, startTime, endTime) {
     context.fillStyle = bucket.count ? '#76ad8d' : '#38463c';
     context.fillRect(x, pad.top + plotHeight - barHeight, barWidth, barHeight);
   });
+  context.strokeStyle = '#d8bd72'; context.lineWidth = 1.5; context.beginPath();
+  movingAverage.forEach((value, index) => {
+    const x = pad.left + (index + 0.5) * plotWidth / bucketCount;
+    const y = pad.top + plotHeight - value / maxCount * plotHeight;
+    if (index) context.lineTo(x, y); else context.moveTo(x, y);
+  });
+  context.stroke();
   context.fillStyle = '#77756d'; context.textAlign = 'center'; context.textBaseline = 'top';
   const axisLabels = [];
   for (let index = 0; index <= 4; index += 1) {
@@ -417,57 +444,79 @@ function drawVolume(rows, startTime, endTime) {
   $('#volumeNow').textContent = `${rows.length.toLocaleString()} NFT · ${totalUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
   const latestBucket = buckets[buckets.length - 1];
   $('#volumeRate').textContent = `${latestBucket.count} NFT · ${latestBucket.usdt.toFixed(2)} USDT`;
-  return { buckets, startTime, endTime, pad, plotWidth, plotHeight, bounds: { width, height } };
+  return { buckets, movingAverage, startTime, endTime, pad, plotWidth, plotHeight, bounds: { width, height } };
 }
 
 function renderTimeline() {
   if (!timelineSnapshot) return;
-  const series = timelineSnapshot.assets[timelineAsset];
-  const fullStart = Math.min(series.trades[0]?.[0] ?? Infinity, series.bids[0]?.[0] ?? Infinity);
-  const fullEnd = Math.max(series.trades[series.trades.length - 1]?.[0] ?? 0, series.bids[series.bids.length - 1]?.[0] ?? 0);
+  const marketKeys = timelineAsset === 'all' ? ['relic', 'loom'] : [timelineAsset];
+  const seriesByMarket = Object.fromEntries(marketKeys.map((key) => [key, timelineSnapshot.assets[key]]));
+  const allTrades = marketKeys.flatMap((key) => seriesByMarket[key].trades);
+  const allBids = marketKeys.flatMap((key) => seriesByMarket[key].bids);
+  const allTimelineRows = [...allTrades, ...allBids];
+  const fullStart = allTimelineRows.reduce((value, row) => Math.min(value, row[0]), Infinity);
+  const fullEnd = allTimelineRows.reduce((value, row) => Math.max(value, row[0]), 0);
   if (!Number.isFinite(fullStart) || fullEnd < fullStart) return;
   const duration = ({ '24h': 86400, '6h': 21600, '1h': 3600 })[historyRange];
   const startTime = historyRange === 'all' ? fullStart : Math.max(fullStart, fullEnd - duration);
   const endTime = fullEnd;
-  const trades = series.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
-  const allWindowBids = series.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
-  const credible = credibleBids(series.trades, allWindowBids);
-  const bids = credible.rows;
-  const tradePrices = trades.map((row) => row[1]);
-  const bidPrices = bids.map((row) => row[1]);
-  const combined = [...tradePrices, ...bidPrices].sort((a, b) => a - b);
-  const commonDomain = $('#sharedScale').checked && combined.length
+  const marketData = Object.fromEntries(marketKeys.map((key) => {
+    const source = seriesByMarket[key];
+    const trades = source.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
+    const rawBids = source.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
+    const credible = credibleBids(source.trades, rawBids);
+    return [key, { trades, tradePlot: trimmedRows(trades), bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot: trimmedRows(credible.rows), excluded: credible.excluded + Math.max(0, credible.rows.length - trimmedRows(credible.rows).length) }];
+  }));
+  const trades = marketKeys.flatMap((key) => marketData[key].trades).sort((a, b) => a[0] - b[0]);
+  const visibleTradeRows = marketKeys.flatMap((key) => marketData[key].tradePlot).sort((a, b) => a[0] - b[0]);
+  const lineColors = { relicTrade: '#d8bd72', relicBid: '#69b78f', loomTrade: '#d58a68', loomBid: '#86a9d2' };
+  const lineSeries = [];
+  for (const key of marketKeys) {
+    const data = marketData[key];
+    const includeTrades = historySeries !== 'bid';
+    const includeBids = historySeries !== 'trade';
+    const prefix = key === 'relic' ? 'relic' : 'loom';
+    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, color: lineColors[`${prefix}Trade`] });
+    if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
+  }
+  const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
+  const commonDomain = combined.length
     ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
-    : null;
-  const tradeView = drawTimelineCanvas($('#tradeTimeline'), trades, 'trade', commonDomain, startTime, endTime);
-  const bidView = drawTimelineCanvas($('#bidTimeline'), bids, 'bid', commonDomain, startTime, endTime);
-  const windowUsdt = trades.reduce((sum, row) => sum + row[1], 0);
-  $('#volumeNow').textContent = `${trades.length.toLocaleString()} NFT · ${windowUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
-  const volumeView = drawVolume(trades, startTime, endTime);
+    : [0.1, 1];
+  const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
+  const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
+  $('#bidTimeline').style.display = 'none';
+  const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
   $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
-  $('#tradeTimeline').style.display = historySeries === 'bid' ? 'none' : 'block';
-  $('#bidTimeline').style.display = historySeries === 'trade' ? 'none' : 'block';
-  const marketName = timelineAsset === 'relic' ? 'Relics' : 'Looms';
-  const titles = { trade: [`${marketName} 成交成本`, '逐笔成交价格与时间对应'], bid: [`${marketName} 历史挂单`, '按历史成交参考价过滤异常挂单'], hybrid: [`${marketName} 成交成本 + 挂单`, '两类数据共用价格轴和时间轴'] };
+  $('#tradeTimeline').style.display = 'block';
+  const marketName = timelineAsset === 'all' ? 'Relics + Looms' : timelineAsset === 'relic' ? 'Relics' : 'Looms';
+  const titles = { trade: [`${marketName} 成交成本`, '逐笔成交中位分位带之外的极端值已过滤'], bid: [`${marketName} 历史挂单`, '按同一时期成交中位价过滤偏离挂单'], hybrid: [`${marketName} 成交成本 + 挂单`, timelineAsset === 'all' ? '四条序列共用时间轴与对数 USDT 价格轴' : '成交与挂单使用独立颜色，并共用时间轴'] };
   $('#timelineChartTitle').textContent = titles[historySeries][0];
   $('#timelineChartSubtitle').textContent = titles[historySeries][1];
   $('#timelineChartTitle').previousElementSibling.className = `legend-dot ${historySeries === 'bid' ? 'bid-dot' : 'trade-dot'}`;
-  timelineView = { tradeView, bidView, volumeView, trades, bids, startTime, endTime };
-  $('#timelineSample').textContent = `${trades.length.toLocaleString()} 笔成交 · ${bids.length.toLocaleString()} 笔有效挂单`;
-  $('#firstTradePrice').textContent = series.summary.firstPrice === null ? '—' : `${series.summary.firstPrice.toFixed(2)} USDT`;
-  $('#firstTradeAt').textContent = series.summary.firstAt ? new Date(series.summary.firstAt * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#lastTradePrice').textContent = series.summary.lastPrice === null ? '—' : `${series.summary.lastPrice.toFixed(2)} USDT`;
-  $('#lastTradeAt').textContent = series.summary.lastAt ? new Date(series.summary.lastAt * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#allTradeAverage').textContent = series.summary.average === null ? '—' : `${series.summary.average.toFixed(2)} USDT`;
-  $('#allTradeCount').textContent = `${series.summary.tradeCount.toLocaleString()} 笔逐笔成交`;
-  $('#allTradeMedian').textContent = series.summary.median === null ? '—' : `${series.summary.median.toFixed(2)} USDT`;
-  $('#allTradeRange').textContent = `区间 ${series.summary.low?.toFixed(2) ?? '—'} – ${series.summary.high?.toFixed(2) ?? '—'} USDT`;
-  $('#allBidCount').textContent = series.summary.bidCount.toLocaleString();
-  $('#visibleEventCount').textContent = `当前范围 ${bids.length.toLocaleString()} 笔 · 已过滤偏差挂单 ${credible.excluded} 笔`;
+  timelineView = { tradeView, volumeView, markets: marketData, trades: visibleTradeRows, startTime, endTime };
+  const visibleBids = marketKeys.flatMap((key) => marketData[key].bidPlot);
+  const excludedBids = marketKeys.reduce((sum, key) => sum + marketData[key].excluded, 0);
+  $('#timelineSample').textContent = `${visibleTradeRows.length.toLocaleString()} 笔有效成交 · ${visibleBids.length.toLocaleString()} 笔有效挂单`;
+  const summaryTrades = allTrades.filter((row) => row[1] > 0).sort((a, b) => a[0] - b[0]);
+  const firstTrade = summaryTrades[0]; const lastTrade = summaryTrades[summaryTrades.length - 1];
+  const summaryPrices = summaryTrades.map((row) => row[1]);
+  const average = summaryPrices.length ? summaryPrices.reduce((sum, value) => sum + value, 0) / summaryPrices.length : null;
+  $('#firstTradePrice').textContent = firstTrade ? `${firstTrade[1].toFixed(2)} USDT` : '—';
+  $('#firstTradeAt').textContent = firstTrade ? new Date(firstTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#lastTradePrice').textContent = lastTrade ? `${lastTrade[1].toFixed(2)} USDT` : '—';
+  $('#lastTradeAt').textContent = lastTrade ? new Date(lastTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#allTradeAverage').textContent = average === null ? '—' : `${average.toFixed(2)} USDT`;
+  $('#allTradeCount').textContent = `${summaryTrades.length.toLocaleString()} 笔逐笔成交`;
+  $('#allTradeMedian').textContent = summaryPrices.length ? `${medianValue(summaryPrices).toFixed(2)} USDT` : '—';
+  const priceRange = summaryPrices.reduce((range, value) => [Math.min(range[0], value), Math.max(range[1], value)], [Infinity, -Infinity]);
+  $('#allTradeRange').textContent = `区间 ${summaryPrices.length ? priceRange[0].toFixed(2) : '—'} – ${summaryPrices.length ? priceRange[1].toFixed(2) : '—'} USDT`;
+  $('#allBidCount').textContent = allBids.length.toLocaleString();
+  $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已滤除异常价格 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = historyScale === 'focus' ? '挂单仅显示同一时期成交中位价的 35%–175%；悬停查看同一时间点成交、挂单与 VOL' : '价格轴覆盖所选时段全部价格；挂单异常值仍按成交中位价过滤';
-  $('#timelineSnapshot').textContent = `${marketName} · ${rangeLabels[historyRange]} · 数据区块 ${timelineSnapshot.indexedBlock.toLocaleString()} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
+  $('#focusNote').textContent = `成交与挂单按各自 1%–99% 分位截尾；挂单另按成交中位价的 35%–175% 过滤。VOL 折线为 4 桶移动均值`;
+  $('#timelineSnapshot').textContent = `${marketName} · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
 function showTimelineTooltip(event) {
@@ -479,20 +528,12 @@ function showTimelineTooltip(event) {
   const ratio = Math.max(0, Math.min(1, (x - left) / plotWidth));
   timelineCursorRatio = ratio;
   const targetTime = timelineView.startTime + ratio * (timelineView.endTime - timelineView.startTime);
-  let low = 0; let high = timelineView.trades.length - 1;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (timelineView.trades[mid][0] < targetTime) low = mid + 1; else high = mid;
-  }
-  const tradeCandidates = timelineView.trades.length ? [timelineView.trades[low], timelineView.trades[Math.max(0, low - 1)]].filter(Boolean) : [];
-  const nearestTrade = tradeCandidates.length ? tradeCandidates.reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best) : null;
   const findNearest = (rows) => {
     if (!rows.length) return null;
     let leftIndex = 0; let rightIndex = rows.length - 1;
     while (leftIndex < rightIndex) { const mid = (leftIndex + rightIndex) >>> 1; if (rows[mid][0] < targetTime) leftIndex = mid + 1; else rightIndex = mid; }
     return [rows[leftIndex], rows[Math.max(0, leftIndex - 1)]].filter(Boolean).reduce((best, item) => Math.abs(item[0] - targetTime) < Math.abs(best[0] - targetTime) ? item : best);
   };
-  const nearestBid = findNearest(timelineView.bids);
   const bucketIndex = Math.max(0, Math.min(timelineView.volumeView.buckets.length - 1, Math.floor(ratio * timelineView.volumeView.buckets.length)));
   const bucket = timelineView.volumeView.buckets[bucketIndex];
   const tip = $('#timelineTooltip');
@@ -501,9 +542,15 @@ function showTimelineTooltip(event) {
   tip.style.left = `${Math.min(boardRect.width - 250, Math.max(8, event.clientX - boardRect.left + 12))}px`;
   tip.style.top = `${Math.max(8, event.clientY - boardRect.top - 28)}px`;
   const closeTo = (row) => row && Math.abs(row[0] - targetTime) <= Math.max(3600, (timelineView.endTime - timelineView.startTime) / 70);
-  const tradeInfo = closeTo(nearestTrade) ? `<div>最近成交成本 <strong>${nearestTrade[1].toFixed(2)} USDT · #${nearestTrade[2]}</strong></div>` : '<div>最近成交成本 <strong>该时间点附近无成交</strong></div>';
-  const bidInfo = closeTo(nearestBid) ? `<div>最近挂单 <strong>${nearestBid[1].toFixed(2)} USDT · ${nearestBid[3]} NFT</strong></div>` : '<div>最近挂单 <strong>该时间点附近无挂单</strong></div>';
-  tip.innerHTML = `<time>${new Date(targetTime * 1000).toLocaleString('zh-CN', { hour12: false })}</time>${tradeInfo}${bidInfo}<div>VOL <strong>${bucket.count} NFT · ${bucket.usdt.toFixed(2)} USDT</strong></div>`;
+  const marketLabel = { relic: 'Relics', loom: 'Looms' };
+  const rows = Object.entries(timelineView.markets).map(([key, data]) => {
+    const trade = findNearest(data.tradePlot);
+    const bid = findNearest(data.bidPlot);
+    const tradeText = closeTo(trade) ? `${trade[1].toFixed(2)} USDT` : '—';
+    const bidText = closeTo(bid) ? `${bid[1].toFixed(2)} USDT · ${bid[3]} NFT` : '—';
+    return `<div><span>${marketLabel[key]} 成交 / 挂单</span><strong>${tradeText} / ${bidText}</strong></div>`;
+  }).join('');
+  tip.innerHTML = `<time>${new Date(targetTime * 1000).toLocaleString('zh-CN', { hour12: false })}</time>${rows}<div><span>VOL / 移动均值</span><strong>${bucket.count} NFT / ${Math.round(timelineView.volumeView.movingAverage[bucketIndex] || 0)} NFT</strong></div>`;
   const plotLeft = timelineView.tradeView.bounds.left;
   const cursorX = plotLeft + ratio * timelineView.tradeView.bounds.plotWidth;
   const volumeCursorX = timelineView.volumeView.pad.left + ratio * timelineView.volumeView.plotWidth;
