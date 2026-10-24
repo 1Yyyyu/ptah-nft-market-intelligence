@@ -285,7 +285,7 @@ function logTicks(minPrice, maxPrice) {
   return ticks.slice(0, 7);
 }
 
-function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
+function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear', marketDomains = null) {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -308,16 +308,20 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
 
   const allRows = lineSeries.flatMap((series) => series.rows);
   const sortedPrices = allRows.map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
-  let minPrice = sharedDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
-  let maxPrice = sharedDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices[sortedPrices.length - 1]);
+  const primaryDomain = marketDomains?.relic || sharedDomain;
+  let minPrice = primaryDomain?.[0] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.01) : sortedPrices[0]);
+  let maxPrice = primaryDomain?.[1] ?? (historyScale === 'focus' ? quantile(sortedPrices, 0.99) : sortedPrices[sortedPrices.length - 1]);
   if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice) || minPrice <= 0) { minPrice = 0.01; maxPrice = 1; }
   if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
   const logMin = Math.log10(minPrice); const logMax = Math.log10(maxPrice);
   const px = (timestamp) => padding.left + (timestamp - startTime) / Math.max(1, endTime - startTime) * plotWidth;
-  const py = (price) => {
-    const value = scaleType === 'log' ? Math.log10(Math.max(minPrice, price)) : price;
-    const top = scaleType === 'log' ? logMax : maxPrice;
-    const bottom = scaleType === 'log' ? logMin : minPrice;
+  const py = (price, market) => {
+    const domain = marketDomains?.[market] || [minPrice, maxPrice];
+    const domainMin = domain[0]; const domainMax = domain[1];
+    const domainLogMin = Math.log10(domainMin); const domainLogMax = Math.log10(domainMax);
+    const value = scaleType === 'log' ? Math.log10(Math.max(domainMin, price)) : price;
+    const top = scaleType === 'log' ? domainLogMax : domainMax;
+    const bottom = scaleType === 'log' ? domainLogMin : domainMin;
     return padding.top + (top - value) / Math.max(0.000001, top - bottom) * plotHeight;
   };
 
@@ -334,6 +338,18 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     context.fillStyle = '#77756d';
     context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), padding.left - 8, y);
   });
+  if (marketDomains?.loom) {
+    const [loomMin, loomMax] = marketDomains.loom;
+    const loomTicks = scaleType === 'log' ? logTicks(loomMin, loomMax).reverse() : Array.from({ length: 5 }, (_, index) => loomMax - (loomMax - loomMin) * index / 4);
+    context.textAlign = 'left';
+    loomTicks.forEach((value) => {
+      const y = scaleType === 'log'
+        ? padding.top + (Math.log10(loomMax) - Math.log10(value)) / Math.max(0.000001, Math.log10(loomMax) - Math.log10(loomMin)) * plotHeight
+        : padding.top + (loomMax - value) / Math.max(0.000001, loomMax - loomMin) * plotHeight;
+      context.fillStyle = '#86a9d2';
+      context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), width - padding.right + 5, y);
+    });
+  }
   const timeTicks = 4;
   context.textAlign = 'center';
   context.textBaseline = 'top';
@@ -355,7 +371,7 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     context.lineWidth = series.width || 1.25;
     if (series.kind === 'trade' && historyMode !== 'bubble') {
       context.beginPath();
-      rows.forEach((row, index) => { const x = px(row[0]); const y = py(row[1]); if (index) context.lineTo(x, y); else context.moveTo(x, y); });
+      rows.forEach((row, index) => { const x = px(row[0]); const y = py(row[1], series.market); if (index) context.lineTo(x, y); else context.moveTo(x, y); });
       context.stroke();
     }
     if (historyMode !== 'line' || series.kind === 'bid') {
@@ -365,11 +381,11 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
       for (let index = 0; index < marks.length; index += stride) {
         const row = marks[index];
         const radius = series.kind === 'bid' ? 2.2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4) : (historyMode === 'bubble' ? 2.1 : 1.75);
-        context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
+        context.beginPath(); context.arc(px(row[0]), py(row[1], series.market), radius, 0, Math.PI * 2); context.fill();
       }
     }
   });
-  return { points: allRows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], startTime, endTime, axisLabels, scaleType };
+  return { points: allRows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], marketDomains, startTime, endTime, axisLabels, scaleType };
 }
 
 function medianValue(values) {
@@ -491,13 +507,17 @@ function renderTimeline() {
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
+  const marketDomains = timelineAsset === 'all' ? Object.fromEntries(marketKeys.map((key) => {
+    const values = lineSeries.filter((series) => series.market === key).flatMap((series) => series.rows.map((row) => row[1])).filter((value) => value > 0).sort((a, b) => a - b);
+    return [key, values.length ? [quantile(values, 0.01), quantile(values, 0.99)] : [0.1, 1]];
+  })) : null;
   const commonDomain = combined.length
     ? timelineAsset === 'all'
-      ? [quantile(combined, 0.01), quantile(combined, 0.99)]
+      ? marketDomains.relic
       : [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
   const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
-  const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
+  const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale, marketDomains);
   $('#bidTimeline').style.display = 'none';
   const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
@@ -540,7 +560,7 @@ function renderTimeline() {
   $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已过滤极端挂单 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
   $('#focusNote').textContent = timelineAsset === 'all'
-    ? '融合图使用稳健对数价格轴（1%–99%）；极端事件保留并贴合轴边界，挂单按成交中位价过滤'
+    ? '同图双价格尺度：左轴 NFT、右轴矿机；共用时间轴，挂单按成交中位价过滤'
     : '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
