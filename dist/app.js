@@ -20,9 +20,9 @@ let range = 10;
 let filter = '';
 let historyMode = 'hybrid';
 let historyRange = 'all';
-let historyScale = 'focus';
+let historyScale = 'all';
 let historySeries = 'hybrid';
-let timelineAsset = 'all';
+let timelineAsset = 'relic';
 let timelineCursorRatio = null;
 let hoverTime = null;
 let timelineView = null;
@@ -268,33 +268,7 @@ function priceRows(rows) {
 }
 
 function trimmedRows(rows, low = 0.01, high = 0.99) {
-  const valid = priceRows(rows);
-  if (valid.length < 8) return valid;
-  const values = valid.map((row) => row[1]).sort((a, b) => a - b);
-  const floor = quantile(values, low);
-  const ceiling = quantile(values, high);
-  return valid.filter((row) => row[1] >= floor && row[1] <= ceiling);
-}
-
-function aggregateTradeBubbles(rows, startTime, endTime) {
-  if (!rows.length) return [];
-  const bucketCount = Math.max(24, Math.min(180, Math.floor(Math.max(1, endTime - startTime) / 3600)));
-  const duration = Math.max(1, endTime - startTime);
-  const buckets = Array.from({ length: bucketCount }, () => []);
-  rows.forEach((row) => {
-    const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((row[0] - startTime) / duration * bucketCount)));
-    buckets[index].push(row);
-  });
-  return buckets.flatMap((bucket, index) => {
-    if (!bucket.length) return [];
-    const sorted = bucket.map((row) => row[1]).sort((a, b) => a - b);
-    return [[
-      startTime + (index + 0.5) * duration / bucketCount,
-      medianValue(sorted),
-      bucket[0][2],
-      bucket.length,
-    ]];
-  });
+  return priceRows(rows);
 }
 
 function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
@@ -371,12 +345,12 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
       context.stroke();
     }
     if (historyMode !== 'line' || series.kind === 'bid') {
-      const quantities = marks.map((row) => series.kind === 'bid' ? row[3] : row[3] || 1).filter((value) => value > 0).sort((a, b) => a - b);
+      const quantities = series.kind === 'bid' ? marks.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b) : [];
       const q90 = Math.max(1, quantile(quantities, 0.9));
       const stride = Math.max(1, Math.ceil(marks.length / Math.max(900, plotWidth * 2)));
       for (let index = 0; index < marks.length; index += stride) {
         const row = marks[index];
-        const radius = 2.2 + Math.min(7, Math.sqrt(Math.max(0, series.kind === 'bid' ? row[3] : row[3] || 1) / q90) * 4);
+        const radius = series.kind === 'bid' ? 2.2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4) : (historyMode === 'bubble' ? 2.1 : 1.75);
         context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
       }
     }
@@ -392,23 +366,8 @@ function medianValue(values) {
 }
 
 function credibleBids(trades, bids) {
-  const filtered = [];
-  let excluded = 0;
-  const validTrades = priceRows(trades);
-  for (const bid of bids) {
-    let low = 0; let high = validTrades.length;
-    while (low < high) {
-      const middle = (low + high) >>> 1;
-      if (validTrades[middle][0] <= bid[0]) low = middle + 1; else high = middle;
-    }
-    const before = validTrades.slice(Math.max(0, low - 40), low);
-    const referenceRows = before.length >= 5 ? before.slice(-25) : validTrades.slice(Math.max(0, low - 10), Math.min(validTrades.length, low + 15));
-    const reference = medianValue(referenceRows.map((row) => row[1]));
-    const absoluteFloor = 0.1;
-    if (bid[1] < absoluteFloor || (reference && (bid[1] < reference * 0.35 || bid[1] > reference * 1.75))) excluded += 1;
-    else filtered.push(bid);
-  }
-  return { rows: filtered, excluded };
+  const rows = bids.filter((bid) => Number.isFinite(bid[1]) && bid[1] > 0);
+  return { rows, excluded: bids.length - rows.length };
 }
 
 function drawVolume(rows, startTime, endTime) {
@@ -472,7 +431,7 @@ function drawVolume(rows, startTime, endTime) {
 
 function renderTimeline() {
   if (!timelineSnapshot) return;
-  const marketKeys = timelineAsset === 'all' ? ['relic', 'loom'] : [timelineAsset];
+  const marketKeys = [timelineAsset];
   const seriesByMarket = Object.fromEntries(marketKeys.map((key) => [key, timelineSnapshot.assets[key]]));
   const allTrades = marketKeys.flatMap((key) => seriesByMarket[key].trades);
   const allBids = marketKeys.flatMap((key) => seriesByMarket[key].bids);
@@ -488,7 +447,7 @@ function renderTimeline() {
     const trades = source.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const rawBids = source.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const credible = credibleBids(source.trades, rawBids);
-    return [key, { trades, tradePlot: trimmedRows(trades), bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot: trimmedRows(credible.rows), excluded: credible.excluded + Math.max(0, credible.rows.length - trimmedRows(credible.rows).length) }];
+    return [key, { trades, tradePlot: trimmedRows(trades), bids: credible.rows, bidPlot: trimmedRows(credible.rows), excluded: credible.excluded }];
   }));
   const trades = marketKeys.flatMap((key) => marketData[key].trades).sort((a, b) => a[0] - b[0]);
   const visibleTradeRows = marketKeys.flatMap((key) => marketData[key].tradePlot).sort((a, b) => a[0] - b[0]);
@@ -499,22 +458,22 @@ function renderTimeline() {
     const includeTrades = historySeries !== 'bid';
     const includeBids = historySeries !== 'trade';
     const prefix = key === 'relic' ? 'relic' : 'loom';
-    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, bubbleRows: aggregateTradeBubbles(data.tradePlot, startTime, endTime), color: lineColors[`${prefix}Trade`] });
+    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, color: lineColors[`${prefix}Trade`] });
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
   const commonDomain = combined.length
     ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
-  const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
+  const priceScale = 'linear';
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
   $('#bidTimeline').style.display = 'none';
   const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
   $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
   $('#tradeTimeline').style.display = 'block';
-  const marketName = timelineAsset === 'all' ? 'NFT + 矿机' : timelineAsset === 'relic' ? 'Relics' : 'Looms';
-  const titles = { trade: [`${marketName} 成交成本`, '逐笔成交中位分位带之外的极端值已过滤'], bid: [`${marketName} 历史挂单`, '按同一时期成交中位价过滤偏离挂单'], hybrid: [`${marketName} 成交成本 + 挂单对比`, timelineAsset === 'all' ? '四条独立序列共用时间轴与对数 USDT 价格轴' : '成交与挂单使用独立颜色，并共用时间轴'] };
+  const marketName = timelineAsset === 'relic' ? 'Relics' : 'Looms';
+  const titles = { trade: [`${marketName} 成交成本`, '完整链上成交价格与时间'], bid: [`${marketName} 历史挂单`, '完整链上挂单价格与数量'], hybrid: [`${marketName} 成交成本 + 挂单`, '成交与挂单使用独立颜色，并共用时间轴'] };
   $('#timelineChartTitle').textContent = titles[historySeries][0];
   $('#timelineChartSubtitle').textContent = titles[historySeries][1];
   $('#timelineChartTitle').previousElementSibling.className = `legend-dot ${historySeries === 'bid' ? 'bid-dot' : 'trade-dot'}`;
@@ -522,9 +481,7 @@ function renderTimeline() {
   const visibleBids = marketKeys.flatMap((key) => marketData[key].bidPlot);
   const excludedBids = marketKeys.reduce((sum, key) => sum + marketData[key].excluded, 0);
   const perMarketText = (field, formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(field(key))}`).join(' · ');
-  $('#timelineSample').textContent = timelineAsset === 'all'
-    ? `${perMarketText((key) => marketData[key].tradePlot.length, (value) => `${value.toLocaleString()} 笔成交`)} · ${perMarketText((key) => marketData[key].bidPlot.length, (value) => `${value.toLocaleString()} 笔挂单`)}`
-    : `${visibleTradeRows.length.toLocaleString()} 笔有效成交 · ${visibleBids.length.toLocaleString()} 笔有效挂单`;
+  $('#timelineSample').textContent = `${visibleTradeRows.length.toLocaleString()} 笔成交 · ${visibleBids.length.toLocaleString()} 笔挂单`;
   const summaryTrades = allTrades.filter((row) => row[1] > 0).sort((a, b) => a[0] - b[0]);
   const firstTrade = summaryTrades[0]; const lastTrade = summaryTrades[summaryTrades.length - 1];
   const summaryPrices = summaryTrades.map((row) => row[1]);
@@ -537,19 +494,19 @@ function renderTimeline() {
   };
   const summaries = Object.fromEntries(marketKeys.map((key) => [key, marketSummary(key)]));
   const pair = (formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(summaries[key])}`).join(' / ');
-  $('#firstTradePrice').textContent = timelineAsset === 'all' ? pair((summary) => summary.first ? `${summary.first[1].toFixed(2)}` : '—') + ' USDT' : firstTrade ? `${firstTrade[1].toFixed(2)} USDT` : '—';
-  $('#firstTradeAt').textContent = timelineAsset === 'all' ? pair((summary) => summary.first ? new Date(summary.first[0] * 1000).toLocaleDateString('zh-CN') : '—') : firstTrade ? new Date(firstTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#lastTradePrice').textContent = timelineAsset === 'all' ? pair((summary) => summary.last ? `${summary.last[1].toFixed(2)}` : '—') + ' USDT' : lastTrade ? `${lastTrade[1].toFixed(2)} USDT` : '—';
-  $('#lastTradeAt').textContent = timelineAsset === 'all' ? pair((summary) => summary.last ? new Date(summary.last[0] * 1000).toLocaleDateString('zh-CN') : '—') : lastTrade ? new Date(lastTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#allTradeAverage').textContent = timelineAsset === 'all' ? pair((summary) => summary.avg === null ? '—' : summary.avg.toFixed(2)) + ' USDT' : average === null ? '—' : `${average.toFixed(2)} USDT`;
-  $('#allTradeCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.count.toLocaleString()} 笔`) : `${summaryTrades.length.toLocaleString()} 笔逐笔成交`;
-  $('#allTradeMedian').textContent = timelineAsset === 'all' ? pair((summary) => summary.median === null ? '—' : summary.median.toFixed(2)) + ' USDT' : summaryPrices.length ? `${medianValue(summaryPrices).toFixed(2)} USDT` : '—';
+  $('#firstTradePrice').textContent = firstTrade ? `${firstTrade[1].toFixed(2)} USDT` : '—';
+  $('#firstTradeAt').textContent = firstTrade ? new Date(firstTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#lastTradePrice').textContent = lastTrade ? `${lastTrade[1].toFixed(2)} USDT` : '—';
+  $('#lastTradeAt').textContent = lastTrade ? new Date(lastTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#allTradeAverage').textContent = average === null ? '—' : `${average.toFixed(2)} USDT`;
+  $('#allTradeCount').textContent = `${summaryTrades.length.toLocaleString()} 笔逐笔成交`;
+  $('#allTradeMedian').textContent = summaryPrices.length ? `${medianValue(summaryPrices).toFixed(2)} USDT` : '—';
   const priceRange = summaryPrices.reduce((range, value) => [Math.min(range[0], value), Math.max(range[1], value)], [Infinity, -Infinity]);
-  $('#allTradeRange').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.min?.toFixed(2) ?? '—'}–${summary.max?.toFixed(2) ?? '—'}`) + ' USDT' : `区间 ${summaryPrices.length ? priceRange[0].toFixed(2) : '—'} – ${summaryPrices.length ? priceRange[1].toFixed(2) : '—'} USDT`;
-  $('#allBidCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.bids}`) : allBids.length.toLocaleString();
-  $('#visibleEventCount').textContent = timelineAsset === 'all' ? `NFT / 矿机分别展示 · 已滤除异常价格 ${excludedBids} 笔` : `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已滤除异常价格 ${excludedBids} 笔`;
+  $('#allTradeRange').textContent = `区间 ${summaryPrices.length ? priceRange[0].toFixed(2) : '—'} – ${summaryPrices.length ? priceRange[1].toFixed(2) : '—'} USDT`;
+  $('#allBidCount').textContent = allBids.length.toLocaleString();
+  $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 无效价格 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = `成交与挂单按各自 1%–99% 分位截尾；挂单另按成交中位价的 35%–175% 过滤。VOL 折线为 4 桶移动均值`;
+  $('#focusNote').textContent = '完整链上成交与挂单价格；成交气泡半径固定代表单笔事件，挂单气泡半径按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
