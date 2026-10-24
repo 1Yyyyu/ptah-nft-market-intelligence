@@ -372,10 +372,13 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     }
     if (historyMode !== 'line' || series.kind === 'bid') {
       const bubbleRows = series.kind === 'trade' ? (series.pointRows || rows) : rows;
-      const bubbles = new Map();
       const quantities = series.kind === 'bid' ? rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b) : [];
       const q90 = Math.max(1, quantile(quantities, 0.9));
-      for (const row of bubbleRows) {
+      const stride = series.kind === 'trade' && historyMode === 'hybrid'
+        ? Math.max(1, Math.ceil(bubbleRows.length / Math.max(2500, plotWidth * 5)))
+        : 1;
+      for (let index = 0; index < bubbleRows.length; index += stride) {
+        const row = bubbleRows[index];
         const x = px(row[0]); const y = py(row[1]);
         if (x < padding.left || x > width - padding.right || y < padding.top || y > height - padding.bottom) continue;
         if (series.kind === 'bid') {
@@ -384,17 +387,10 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
           context.strokeStyle = '#0b0d0b'; context.lineWidth = 0.8; context.stroke();
           continue;
         }
-        const key = `${Math.round(x)}:${Math.round(y)}`;
-        const bubble = bubbles.get(key);
-        if (bubble) bubble.count += 1;
-        else bubbles.set(key, { x, y, count: 1 });
+        const radius = historyMode === 'bubble' ? 2.1 : 1.75;
+        context.globalAlpha = historyMode === 'hybrid' ? 0.5 : 0.72;
+        context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
       }
-      context.globalAlpha = historyMode === 'hybrid' ? 0.62 : 0.78;
-      bubbles.forEach((bubble) => {
-        const radius = Math.min(10, 2 + Math.sqrt(bubble.count) * 1.15);
-        context.beginPath(); context.arc(bubble.x, bubble.y, radius, 0, Math.PI * 2); context.fill();
-        context.strokeStyle = '#171711'; context.lineWidth = 0.7; context.stroke();
-      });
       context.globalAlpha = 1;
     }
   });
@@ -525,11 +521,12 @@ function renderTimeline() {
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const marketDomains = marketKeys.map((key) => {
-    const rangeRows = historyScale === 'focus'
+    const rangeRows = historyMode === 'line' && historyScale === 'focus'
       ? [...marketData[key].tradePlot, ...marketData[key].bidPlot]
       : [...marketData[key].tradePoints, ...marketData[key].bids];
     const values = rangeRows.map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
-    return values.length ? [historyScale === 'focus' ? quantile(values, 0.01) : values[0], historyScale === 'focus' ? quantile(values, 0.99) : values[values.length - 1]] : null;
+    const focusedLine = historyMode === 'line' && historyScale === 'focus';
+    return values.length ? [focusedLine ? quantile(values, 0.01) : values[0], focusedLine ? quantile(values, 0.99) : values[values.length - 1]] : null;
   }).filter(Boolean);
   const commonDomain = marketDomains.length
     ? [Math.min(...marketDomains.map((domain) => domain[0])), Math.max(...marketDomains.map((domain) => domain[1]))]
@@ -577,7 +574,9 @@ function renderTimeline() {
   $('#allBidCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.bids}`) : allBids.length.toLocaleString();
   $('#visibleEventCount').textContent = timelineAsset === 'all' ? `NFT / 矿机分别展示 · 已滤除异常价格 ${excludedBids} 笔` : `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已滤除异常价格 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = `折线为时间桶成交中位价；成交气泡对应链上记录并按像素汇聚显示笔数；挂单气泡半径按剩余数量映射`;
+  $('#focusNote').textContent = historyMode === 'line'
+    ? '折线使用主流价格区间；切换气泡或折线 + 气泡时保留完整链上成交价格范围'
+    : '成交气泡保留完整链上价格范围；挂单气泡半径按链上剩余数量映射；VOL 按时间段统计';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
