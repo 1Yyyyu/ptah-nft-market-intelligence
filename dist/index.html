@@ -6,7 +6,7 @@
   <meta name="description" content="Ptah NFT holders and market depth live dashboard">
   <title>Ptah Live Dashboard</title>
   <link rel="stylesheet" href="./styles.css">
-  <link rel="stylesheet" href="./trade.css?v=timeline-v8">
+  <link rel="stylesheet" href="./trade.css?v=timeline-v4">
 </head>
 <body>
   <div class="shell">
@@ -42,6 +42,11 @@
         <article><div class="metric-label">潜在卖盘 <span>SELL SUPPLY</span></div><strong id="sellSupply">—</strong><small id="sellSupplyNote">链上流通存量上限</small></article>
       </section>
 
+      <section class="panel compare-panel" aria-label="Relics 与 Looms 市场对比">
+        <header class="panel-head"><div><p class="eyebrow">MARKET COMPARISON</p><h2>Relics / Looms 同屏对比</h2></div><small class="compare-note">同一指标、同一口径、同步展示</small></header>
+        <div class="compare-grid" id="compareGrid"></div>
+      </section>
+
       <section class="panel trade-panel timeline-top" id="timelinePanel">
         <header class="panel-head">
           <div><p class="eyebrow">COST &amp; ORDER TIMELINE</p><h2>全历史成本与挂单对比</h2></div>
@@ -50,7 +55,7 @@
         <div class="timeline-controls">
           <div><span>市场</span><div class="mini-segment" role="group" aria-label="历史数据市场"><button class="active" data-timeline-asset="all">NFT + 矿机对比</button><button data-timeline-asset="relic">Relics · NFT</button><button data-timeline-asset="loom">Looms · 矿机</button></div></div>
           <div><span>主视图</span><div class="mini-segment" role="group" aria-label="主视图"><button data-history-series="trade">成交成本</button><button data-history-series="bid">挂单</button><button class="active" data-history-series="hybrid">成本 + 挂单对比</button></div></div>
-          <div><span>图表类型</span><div class="mini-segment" role="group" aria-label="图表类型"><button data-history-mode="line">折线</button><button data-history-mode="bubble">气泡</button><button class="active" data-history-mode="hybrid">折线 + 气泡</button></div></div>
+          <div><span>图表类型</span><div class="mini-segment" role="group" aria-label="图表类型"><button data-history-mode="line">折线</button><button data-history-mode="bubble">气泡</button><button class="active" data-history-mode="hybrid">融合</button></div></div>
           <div><span>时间范围</span><div class="mini-segment" role="group" aria-label="时间范围"><button class="active" data-history-range="all">全部</button><button data-history-range="24h">24H</button><button data-history-range="6h">6H</button><button data-history-range="1h">1H</button></div></div>
           <div><span>价格范围</span><div class="mini-segment" role="group" aria-label="价格范围"><button class="active" data-price-scale="focus">主要区间</button><button data-price-scale="all">全部价格</button></div></div>
           <div><span>图表排列</span><div class="mini-segment" role="group" aria-label="图表排列"><button class="active" data-layout="horizontal">横向</button><button data-layout="vertical">纵向</button></div></div>
@@ -61,9 +66,9 @@
         </div>
         <div class="timeline-board">
           <article class="timeline-chart-card timeline-main-card"><header><div><span class="legend-dot trade-dot"></span><strong id="timelineChartTitle">NFT + 矿机成交成本与挂单对比</strong></div><small id="timelineChartSubtitle">四条独立序列共用时间轴与对数 USDT 价格轴</small></header><div class="canvas-wrap timeline-main-wrap"><canvas id="tradeTimeline" role="img" aria-label="NFT 与矿机成交成本和挂单历史"></canvas><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">USDT</div></div></article>
-          <article class="timeline-chart-card volume-card"><header><div><span class="legend-dot volume-dot"></span><strong>时间段成交量 <em>VOL</em></strong></div><small id="volumeSubtitle">每根柱代表该时间段内的链上成交笔数</small></header><div class="canvas-wrap volume-wrap"><canvas id="volumeTimeline" role="img" aria-label="各时间段实际成交笔数"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">成交笔数 / 时间段</div></div><div class="volume-readout"><strong id="volumeNow">—</strong><span>所选范围成交总量</span><strong id="volumeRate">—</strong><span>最后时间段</span></div></article><div class="timeline-tooltip" id="timelineTooltip"></div>
+          <article class="timeline-chart-card volume-card"><header><div><span class="legend-dot volume-dot"></span><strong>实时成交量 <em>VOL</em></strong></div><small id="volumeSubtitle">按时间桶统计成交 NFT 数量</small></header><div class="canvas-wrap volume-wrap"><canvas id="volumeTimeline" role="img" aria-label="实时成交量 VOL"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">NFT / 桶</div></div><div class="volume-readout"><strong id="volumeNow">—</strong><span>当前窗口成交量</span><strong id="volumeRate">—</strong><span>最近时间桶</span></div></article><div class="timeline-tooltip" id="timelineTooltip"></div>
         </div>
-        <div class="timeline-legend"><span><i class="trade-line"></i>Relics 成交成本（折线 + 成交气泡）</span><span><i class="bid-open"></i>Relics 挂单（数量气泡）</span><span><i class="loom-trade-line"></i>Looms 成交成本（折线 + 成交气泡）</span><span><i class="loom-bid-line"></i>Looms 挂单（数量气泡）</span><em id="focusNote">趋势线按时间桶成交中位价生成，气泡对应链上成交记录</em></div>
+        <div class="timeline-legend"><span><i class="trade-line"></i>Relics 成交</span><span><i class="bid-open"></i>Relics 挂单</span><span><i class="loom-trade-line"></i>Looms 成交</span><span><i class="loom-bid-line"></i>Looms 挂单</span><em id="focusNote">成交与挂单均按 1%–99% 分位过滤极端报价</em></div>
         <footer class="source-note"><span class="pulse"></span><span id="timelineSnapshot">Ptah 完整交易与挂单历史</span><a href="https://ptah.trade/market" target="_blank" rel="noopener">查看交易历史 ↗</a></footer>
       </section>
 
@@ -161,6 +166,6 @@
   <script src="./cost-data.js"></script>
   <script src="./trade-data.js"></script>
   <script src="./timeline-data.js"></script>
-  <script src="./app.js?v=timeline-v8"></script>
+  <script src="./app.js?v=timeline-v4"></script>
 </body>
 </html>
