@@ -379,8 +379,9 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
         const x = px(row[0]); const y = py(row[1]);
         if (x < padding.left || x > width - padding.right || y < padding.top || y > height - padding.bottom) continue;
         if (series.kind === 'bid') {
-          const radius = 2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4);
+          const radius = 3 + Math.min(9, Math.sqrt(Math.max(0, row[3]) / q90) * 5);
           context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
+          context.strokeStyle = '#0b0d0b'; context.lineWidth = 0.8; context.stroke();
           continue;
         }
         const key = `${Math.round(x)}:${Math.round(y)}`;
@@ -388,10 +389,11 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
         if (bubble) bubble.count += 1;
         else bubbles.set(key, { x, y, count: 1 });
       }
-      context.globalAlpha = historyMode === 'hybrid' ? 0.3 : 0.48;
+      context.globalAlpha = historyMode === 'hybrid' ? 0.62 : 0.78;
       bubbles.forEach((bubble) => {
-        const radius = Math.min(8, 1.35 + Math.sqrt(bubble.count));
+        const radius = Math.min(10, 2 + Math.sqrt(bubble.count) * 1.15);
         context.beginPath(); context.arc(bubble.x, bubble.y, radius, 0, Math.PI * 2); context.fill();
+        context.strokeStyle = '#171711'; context.lineWidth = 0.7; context.stroke();
       });
       context.globalAlpha = 1;
     }
@@ -436,8 +438,9 @@ function drawVolume(rows, startTime, endTime) {
   const pad = { left: 54, right: 18, top: 10, bottom: 30 };
   const plotWidth = width - pad.left - pad.right; const plotHeight = height - pad.top - pad.bottom;
   const bucketCount = Math.max(24, Math.min(100, Math.floor(plotWidth / 8)));
-  const buckets = Array.from({ length: bucketCount }, () => ({ count: 0, usdt: 0 }));
   const duration = Math.max(1, endTime - startTime);
+  const bucketDuration = duration / bucketCount;
+  const buckets = Array.from({ length: bucketCount }, (_, index) => ({ count: 0, usdt: 0, start: startTime + index * bucketDuration, end: startTime + (index + 1) * bucketDuration }));
   for (const row of rows) {
     const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((row[0] - startTime) / duration * bucketCount)));
     buckets[index].count += 1; buckets[index].usdt += row[1];
@@ -481,7 +484,7 @@ function drawVolume(rows, startTime, endTime) {
   $('#volumeNow').textContent = `${rows.length.toLocaleString()} NFT · ${totalUsdt.toLocaleString(undefined, { maximumFractionDigits: 1 })} USDT`;
   const latestBucket = buckets[buckets.length - 1];
   $('#volumeRate').textContent = `${latestBucket.count} NFT · ${latestBucket.usdt.toFixed(2)} USDT`;
-  return { buckets, movingAverage, startTime, endTime, pad, plotWidth, plotHeight, bounds: { width, height } };
+  return { buckets, movingAverage, startTime, endTime, bucketDuration, pad, plotWidth, plotHeight, bounds: { width, height } };
 }
 
 function renderTimeline() {
@@ -609,7 +612,8 @@ function showTimelineTooltip(event) {
     const bidText = closeTo(bid) ? `${bid[1].toFixed(2)} USDT · ${bid[3]} NFT` : '—';
     return `<div><span>${marketLabel[key]} 成交 / 挂单</span><strong>${tradeText} / ${bidText}</strong></div>`;
   }).join('');
-  tip.innerHTML = `<time>${new Date(targetTime * 1000).toLocaleString('zh-CN', { hour12: false })}</time>${rows}<div><span>VOL / 移动均值</span><strong>${bucket.count} NFT / ${Math.round(timelineView.volumeView.movingAverage[bucketIndex] || 0)} NFT</strong></div>`;
+  const bucketTime = `${new Date(bucket.start * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}–${new Date(bucket.end * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  tip.innerHTML = `<time>${new Date(targetTime * 1000).toLocaleString('zh-CN', { hour12: false })}</time>${rows}<div><span>该时间段成交量</span><strong>${bucketTime} · ${bucket.count} 笔 / ${bucket.usdt.toFixed(2)} USDT</strong></div><div><span>4 桶均量</span><strong>${Math.round(timelineView.volumeView.movingAverage[bucketIndex] || 0)} 笔 / 时间段</strong></div>`;
   const plotLeft = timelineView.tradeView.bounds.left;
   const cursorX = plotLeft + ratio * timelineView.tradeView.bounds.plotWidth;
   const volumeCursorX = timelineView.volumeView.pad.left + ratio * timelineView.volumeView.plotWidth;
