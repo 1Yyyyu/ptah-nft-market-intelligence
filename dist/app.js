@@ -529,13 +529,10 @@ function renderTimeline() {
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
-  const marketDomains = timelineAsset === 'all' ? Object.fromEntries(marketKeys.map((key) => {
-    const values = lineSeries.filter((series) => series.market === key).flatMap((series) => series.rows.map((row) => row[1])).filter((value) => value > 0).sort((a, b) => a - b);
-    return [key, robustDomain(values)];
-  })) : null;
+  const marketDomains = null;
   const commonDomain = combined.length
     ? timelineAsset === 'all'
-      ? marketDomains.relic
+      ? robustDomain(combined)
       : [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
   const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
@@ -582,7 +579,7 @@ function renderTimeline() {
   $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已过滤极端挂单 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
   $('#focusNote').textContent = timelineAsset === 'all'
-    ? '上下双轨使用各自 2%–98% 稳健价格区间并留出 12% 边距；极端事件保留，挂单按成交中位价过滤'
+    ? 'NFT 与矿机在同一绘图区共用稳健对数价格轴；极端事件保留，挂单按成交中位价过滤'
     : '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
