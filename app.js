@@ -509,7 +509,8 @@ function renderTimeline() {
   const marketSummary = (key) => {
     const rows = marketData[key].trades.filter((row) => row[1] > 0).sort((a, b) => a[0] - b[0]);
     const prices = rows.map((row) => row[1]);
-    return { first: rows[0], last: rows[rows.length - 1], count: rows.length, avg: prices.length ? prices.reduce((sum, value) => sum + value, 0) / prices.length : null, median: prices.length ? medianValue(prices) : null, min: prices.length ? Math.min(...prices) : null, max: prices.length ? Math.max(...prices) : null, bids: marketData[key].bidPlot.length };
+    const bounds = prices.reduce((range, value) => [Math.min(range[0], value), Math.max(range[1], value)], [Infinity, -Infinity]);
+    return { first: rows[0], last: rows[rows.length - 1], count: rows.length, avg: prices.length ? prices.reduce((sum, value) => sum + value, 0) / prices.length : null, median: prices.length ? medianValue(prices) : null, min: prices.length ? bounds[0] : null, max: prices.length ? bounds[1] : null, bids: marketData[key].bidPlot.length };
   };
   const summaries = Object.fromEntries(marketKeys.map((key) => [key, marketSummary(key)]));
   const pair = (formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(summaries[key])}`).join(' / ');
