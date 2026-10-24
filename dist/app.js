@@ -22,7 +22,7 @@ let historyMode = 'hybrid';
 let historyRange = 'all';
 let historyScale = 'all';
 let historySeries = 'hybrid';
-let timelineAsset = 'relic';
+let timelineAsset = 'all';
 let timelineCursorRatio = null;
 let hoverTime = null;
 let timelineView = null;
@@ -366,8 +366,23 @@ function medianValue(values) {
 }
 
 function credibleBids(trades, bids) {
-  const rows = bids.filter((bid) => Number.isFinite(bid[1]) && bid[1] > 0);
-  return { rows, excluded: bids.length - rows.length };
+  const validTrades = priceRows(trades).sort((a, b) => a[0] - b[0]);
+  const globalMedian = medianValue(validTrades.map((row) => row[1]));
+  const rows = [];
+  let excluded = 0;
+  for (const bid of bids) {
+    if (!Number.isFinite(bid[1]) || bid[1] <= 0) { excluded += 1; continue; }
+    let low = 0; let high = validTrades.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (validTrades[middle][0] <= bid[0]) low = middle + 1; else high = middle;
+    }
+    const nearby = validTrades.slice(Math.max(0, low - 30), Math.min(validTrades.length, low + 8));
+    const reference = nearby.length >= 5 ? medianValue(nearby.map((row) => row[1])) : globalMedian;
+    const plausible = reference > 0 && bid[1] >= reference * 0.35 && bid[1] <= reference * 1.75;
+    if (plausible) rows.push(bid); else excluded += 1;
+  }
+  return { rows, excluded };
 }
 
 function drawVolume(rows, startTime, endTime) {
@@ -431,7 +446,7 @@ function drawVolume(rows, startTime, endTime) {
 
 function renderTimeline() {
   if (!timelineSnapshot) return;
-  const marketKeys = [timelineAsset];
+  const marketKeys = timelineAsset === 'all' ? ['relic', 'loom'] : [timelineAsset];
   const seriesByMarket = Object.fromEntries(marketKeys.map((key) => [key, timelineSnapshot.assets[key]]));
   const allTrades = marketKeys.flatMap((key) => seriesByMarket[key].trades);
   const allBids = marketKeys.flatMap((key) => seriesByMarket[key].bids);
@@ -465,15 +480,15 @@ function renderTimeline() {
   const commonDomain = combined.length
     ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
-  const priceScale = 'linear';
+  const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
   $('#bidTimeline').style.display = 'none';
   const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
   $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
   $('#tradeTimeline').style.display = 'block';
-  const marketName = timelineAsset === 'relic' ? 'Relics' : 'Looms';
-  const titles = { trade: [`${marketName} 成交成本`, '完整链上成交价格与时间'], bid: [`${marketName} 历史挂单`, '完整链上挂单价格与数量'], hybrid: [`${marketName} 成交成本 + 挂单`, '成交与挂单使用独立颜色，并共用时间轴'] };
+  const marketName = timelineAsset === 'all' ? 'NFT + 矿机' : timelineAsset === 'relic' ? 'Relics' : 'Looms';
+  const titles = { trade: [`${marketName} 成交成本`, '逐笔链上成交价格与时间'], bid: [`${marketName} 历史挂单`, '过滤明显偏离成交区间的挂单'], hybrid: [`${marketName} 成交成本 + 挂单`, timelineAsset === 'all' ? 'NFT 与矿机四条序列共用时间轴与对数价格轴' : '成交与挂单使用独立颜色，并共用时间轴'] };
   $('#timelineChartTitle').textContent = titles[historySeries][0];
   $('#timelineChartSubtitle').textContent = titles[historySeries][1];
   $('#timelineChartTitle').previousElementSibling.className = `legend-dot ${historySeries === 'bid' ? 'bid-dot' : 'trade-dot'}`;
@@ -481,7 +496,9 @@ function renderTimeline() {
   const visibleBids = marketKeys.flatMap((key) => marketData[key].bidPlot);
   const excludedBids = marketKeys.reduce((sum, key) => sum + marketData[key].excluded, 0);
   const perMarketText = (field, formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(field(key))}`).join(' · ');
-  $('#timelineSample').textContent = `${visibleTradeRows.length.toLocaleString()} 笔成交 · ${visibleBids.length.toLocaleString()} 笔挂单`;
+  $('#timelineSample').textContent = timelineAsset === 'all'
+    ? `NFT ${marketData.relic.tradePlot.length.toLocaleString()} / ${marketData.relic.bidPlot.length.toLocaleString()} · 矿机 ${marketData.loom.tradePlot.length.toLocaleString()} / ${marketData.loom.bidPlot.length.toLocaleString()}`
+    : `${visibleTradeRows.length.toLocaleString()} 笔成交 · ${visibleBids.length.toLocaleString()} 笔有效挂单`;
   const summaryTrades = allTrades.filter((row) => row[1] > 0).sort((a, b) => a[0] - b[0]);
   const firstTrade = summaryTrades[0]; const lastTrade = summaryTrades[summaryTrades.length - 1];
   const summaryPrices = summaryTrades.map((row) => row[1]);
@@ -494,19 +511,19 @@ function renderTimeline() {
   };
   const summaries = Object.fromEntries(marketKeys.map((key) => [key, marketSummary(key)]));
   const pair = (formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(summaries[key])}`).join(' / ');
-  $('#firstTradePrice').textContent = firstTrade ? `${firstTrade[1].toFixed(2)} USDT` : '—';
-  $('#firstTradeAt').textContent = firstTrade ? new Date(firstTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#lastTradePrice').textContent = lastTrade ? `${lastTrade[1].toFixed(2)} USDT` : '—';
-  $('#lastTradeAt').textContent = lastTrade ? new Date(lastTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
-  $('#allTradeAverage').textContent = average === null ? '—' : `${average.toFixed(2)} USDT`;
-  $('#allTradeCount').textContent = `${summaryTrades.length.toLocaleString()} 笔逐笔成交`;
-  $('#allTradeMedian').textContent = summaryPrices.length ? `${medianValue(summaryPrices).toFixed(2)} USDT` : '—';
+  $('#firstTradePrice').textContent = timelineAsset === 'all' ? pair((summary) => summary.first ? summary.first[1].toFixed(2) : '—') + ' USDT' : firstTrade ? `${firstTrade[1].toFixed(2)} USDT` : '—';
+  $('#firstTradeAt').textContent = timelineAsset === 'all' ? pair((summary) => summary.first ? new Date(summary.first[0] * 1000).toLocaleDateString('zh-CN') : '—') : firstTrade ? new Date(firstTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#lastTradePrice').textContent = timelineAsset === 'all' ? pair((summary) => summary.last ? summary.last[1].toFixed(2) : '—') + ' USDT' : lastTrade ? `${lastTrade[1].toFixed(2)} USDT` : '—';
+  $('#lastTradeAt').textContent = timelineAsset === 'all' ? pair((summary) => summary.last ? new Date(summary.last[0] * 1000).toLocaleDateString('zh-CN') : '—') : lastTrade ? new Date(lastTrade[0] * 1000).toLocaleString('zh-CN', { hour12: false }) : '—';
+  $('#allTradeAverage').textContent = timelineAsset === 'all' ? pair((summary) => summary.avg === null ? '—' : summary.avg.toFixed(2)) + ' USDT' : average === null ? '—' : `${average.toFixed(2)} USDT`;
+  $('#allTradeCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.count.toLocaleString()} 笔`) : `${summaryTrades.length.toLocaleString()} 笔逐笔成交`;
+  $('#allTradeMedian').textContent = timelineAsset === 'all' ? pair((summary) => summary.median === null ? '—' : summary.median.toFixed(2)) + ' USDT' : summaryPrices.length ? `${medianValue(summaryPrices).toFixed(2)} USDT` : '—';
   const priceRange = summaryPrices.reduce((range, value) => [Math.min(range[0], value), Math.max(range[1], value)], [Infinity, -Infinity]);
-  $('#allTradeRange').textContent = `区间 ${summaryPrices.length ? priceRange[0].toFixed(2) : '—'} – ${summaryPrices.length ? priceRange[1].toFixed(2) : '—'} USDT`;
-  $('#allBidCount').textContent = allBids.length.toLocaleString();
-  $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 无效价格 ${excludedBids} 笔`;
+  $('#allTradeRange').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.min?.toFixed(2) ?? '—'}–${summary.max?.toFixed(2) ?? '—'}`) + ' USDT' : `区间 ${summaryPrices.length ? priceRange[0].toFixed(2) : '—'} – ${summaryPrices.length ? priceRange[1].toFixed(2) : '—'} USDT`;
+  $('#allBidCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.bids}`) : allBids.length.toLocaleString();
+  $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已过滤极端挂单 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = '完整链上成交与挂单价格；成交气泡半径固定代表单笔事件，挂单气泡半径按剩余数量映射';
+  $('#focusNote').textContent = '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
