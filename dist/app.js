@@ -271,6 +271,20 @@ function trimmedRows(rows, low = 0.01, high = 0.99) {
   return priceRows(rows);
 }
 
+function logTicks(minPrice, maxPrice) {
+  const start = Math.floor(Math.log10(minPrice));
+  const end = Math.ceil(Math.log10(maxPrice));
+  const ticks = [];
+  for (let exponent = start; exponent <= end; exponent += 1) {
+    for (const multiplier of [1, 2, 5]) {
+      const value = multiplier * (10 ** exponent);
+      if (value >= minPrice && value <= maxPrice) ticks.push(value);
+    }
+  }
+  if (ticks.length < 3) return [minPrice, Math.sqrt(minPrice * maxPrice), maxPrice];
+  return ticks.slice(0, 7);
+}
+
 function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
@@ -310,23 +324,23 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
   context.font = '9px sans-serif';
   context.textAlign = 'right';
   context.textBaseline = 'middle';
-  for (let index = 0; index <= 4; index += 1) {
-    const y = padding.top + plotHeight * index / 4;
-    const value = scaleType === 'log'
-      ? Math.pow(10, logMax - (logMax - logMin) * index / 4)
-      : maxPrice - (maxPrice - minPrice) * index / 4;
+  const ticks = scaleType === 'log' ? logTicks(minPrice, maxPrice).reverse() : Array.from({ length: 5 }, (_, index) => maxPrice - (maxPrice - minPrice) * index / 4);
+  ticks.forEach((value) => {
+    const y = scaleType === 'log'
+      ? padding.top + (logMax - Math.log10(value)) / Math.max(0.000001, logMax - logMin) * plotHeight
+      : padding.top + (maxPrice - value) / Math.max(0.000001, maxPrice - minPrice) * plotHeight;
     context.strokeStyle = '#262721';
     context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
     context.fillStyle = '#77756d';
-    context.fillText(value >= 100 ? value.toFixed(0) : value.toFixed(2), padding.left - 8, y);
-  }
-  const ticks = 4;
+    context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), padding.left - 8, y);
+  });
+  const timeTicks = 4;
   context.textAlign = 'center';
   context.textBaseline = 'top';
   const axisLabels = [];
-  for (let index = 0; index <= ticks; index += 1) {
-    const time = startTime + (endTime - startTime) * index / ticks;
-    const x = padding.left + plotWidth * index / ticks;
+  for (let index = 0; index <= timeTicks; index += 1) {
+    const time = startTime + (endTime - startTime) * index / timeTicks;
+    const x = padding.left + plotWidth * index / timeTicks;
     axisLabels.push({ time, x });
     context.fillStyle = '#77756d';
     context.fillText(new Date(time * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }), x, height - padding.bottom + 9);
@@ -478,7 +492,9 @@ function renderTimeline() {
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
   const commonDomain = combined.length
-    ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
+    ? timelineAsset === 'all'
+      ? [quantile(combined, 0.01), quantile(combined, 0.99)]
+      : [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
   const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
@@ -523,7 +539,9 @@ function renderTimeline() {
   $('#allBidCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.bids}`) : allBids.length.toLocaleString();
   $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已过滤极端挂单 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
+  $('#focusNote').textContent = timelineAsset === 'all'
+    ? '融合图使用稳健对数价格轴（1%–99%）；极端事件保留并贴合轴边界，挂单按成交中位价过滤'
+    : '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
