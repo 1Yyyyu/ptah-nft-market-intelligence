@@ -60,7 +60,7 @@
           <article><span>初始成交价</span><strong id="firstTradePrice">—</strong><small id="firstTradeAt">—</small></article><article><span>最新成交价</span><strong id="lastTradePrice">—</strong><small id="lastTradeAt">—</small></article><article><span>全历史均价</span><strong id="allTradeAverage">—</strong><small id="allTradeCount">—</small></article><article><span>全历史中位价</span><strong id="allTradeMedian">—</strong><small id="allTradeRange">—</small></article><article><span>历史挂单</span><strong id="allBidCount">—</strong><small id="visibleEventCount">—</small></article>
         </div>
         <div class="timeline-board">
-          <article class="timeline-chart-card timeline-main-card"><header><div><span class="legend-dot trade-dot"></span><strong id="timelineChartTitle">NFT + 矿机成交成本与挂单对比</strong></div><small id="timelineChartSubtitle">统一左轴 · 矿机价格按 1:10 映射 · 共用时间轴</small></header><div class="canvas-wrap timeline-main-wrap"><canvas id="tradeTimeline" role="img" aria-label="NFT 与矿机成交成本和挂单历史"></canvas><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">USDT 等价尺度（矿机 ÷10）</div></div></article>
+          <article class="timeline-chart-card timeline-main-card"><header><div><span class="legend-dot trade-dot"></span><strong id="timelineChartTitle">NFT + 矿机成交成本与挂单对比</strong></div><small id="timelineChartSubtitle">统一左轴 · 真实 USDT 价格 · 共用时间轴</small></header><div class="canvas-wrap timeline-main-wrap"><canvas id="tradeTimeline" role="img" aria-label="NFT 与矿机成交成本和挂单历史"></canvas><canvas id="bidTimeline" role="img" aria-label="历史买单价格"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">USDT · LOG</div></div></article>
           <article class="timeline-chart-card volume-card"><header><div><span class="legend-dot volume-dot"></span><strong>实时成交量 <em>VOL</em></strong></div><small id="volumeSubtitle">按时间桶统计成交 NFT 数量</small></header><div class="canvas-wrap volume-wrap"><canvas id="volumeTimeline" role="img" aria-label="实时成交量 VOL"></canvas><i class="timeline-cursor" aria-hidden="true"></i><div class="axis-unit">NFT / 桶</div></div><div class="volume-readout"><strong id="volumeNow">—</strong><span>当前窗口成交量</span><strong id="volumeRate">—</strong><span>最近时间桶</span></div></article><div class="timeline-tooltip" id="timelineTooltip"></div>
         </div>
         <div class="timeline-legend"><span><i class="trade-line"></i>成交成本</span><span><i class="bid-open"></i>挂单价格</span><em id="focusNote">完整链上成交与挂单价格</em></div>
@@ -124,6 +124,6 @@
   <script src="./cost-data.js"></script>
   <script src="./trade-data.js"></script>
   <script src="./timeline-data.js"></script>
-  <script src="./app.js?v=timeline-v16"></script>
+  <script src="./app.js?v=timeline-v17"></script>
 </body>
 </html>
