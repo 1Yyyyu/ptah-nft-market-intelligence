@@ -314,6 +314,12 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
   if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice) || minPrice <= 0) { minPrice = 0.01; maxPrice = 1; }
   if (minPrice === maxPrice) { minPrice *= 0.98; maxPrice *= 1.02; }
   const logMin = Math.log10(minPrice); const logMax = Math.log10(maxPrice);
+  const laneGap = marketDomains ? 18 : 0;
+  const laneHeight = marketDomains ? (plotHeight - laneGap) / 2 : plotHeight;
+  const laneFor = (market) => marketDomains ? {
+    top: market === 'loom' ? padding.top + laneHeight + laneGap : padding.top,
+    height: laneHeight,
+  } : { top: padding.top, height: plotHeight };
   const px = (timestamp) => padding.left + (timestamp - startTime) / Math.max(1, endTime - startTime) * plotWidth;
   const py = (price, market) => {
     const domain = marketDomains?.[market] || [minPrice, maxPrice];
@@ -322,17 +328,19 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     const value = scaleType === 'log' ? Math.log10(Math.max(domainMin, price)) : price;
     const top = scaleType === 'log' ? domainLogMax : domainMax;
     const bottom = scaleType === 'log' ? domainLogMin : domainMin;
-    return padding.top + (top - value) / Math.max(0.000001, top - bottom) * plotHeight;
+    const lane = laneFor(market);
+    return lane.top + (top - value) / Math.max(0.000001, top - bottom) * lane.height;
   };
 
   context.font = '9px sans-serif';
   context.textAlign = 'right';
   context.textBaseline = 'middle';
   const ticks = scaleType === 'log' ? logTicks(minPrice, maxPrice).reverse() : Array.from({ length: 5 }, (_, index) => maxPrice - (maxPrice - minPrice) * index / 4);
+  const primaryLane = laneFor('relic');
   ticks.forEach((value) => {
     const y = scaleType === 'log'
-      ? padding.top + (logMax - Math.log10(value)) / Math.max(0.000001, logMax - logMin) * plotHeight
-      : padding.top + (maxPrice - value) / Math.max(0.000001, maxPrice - minPrice) * plotHeight;
+      ? primaryLane.top + (logMax - Math.log10(value)) / Math.max(0.000001, logMax - logMin) * primaryLane.height
+      : primaryLane.top + (maxPrice - value) / Math.max(0.000001, maxPrice - minPrice) * primaryLane.height;
     context.strokeStyle = '#262721';
     context.beginPath(); context.moveTo(padding.left, y); context.lineTo(width - padding.right, y); context.stroke();
     context.fillStyle = '#77756d';
@@ -341,14 +349,19 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
   if (marketDomains?.loom) {
     const [loomMin, loomMax] = marketDomains.loom;
     const loomTicks = scaleType === 'log' ? logTicks(loomMin, loomMax).reverse() : Array.from({ length: 5 }, (_, index) => loomMax - (loomMax - loomMin) * index / 4);
-    context.textAlign = 'left';
+    const loomLane = laneFor('loom');
+    context.textAlign = 'right';
     loomTicks.forEach((value) => {
       const y = scaleType === 'log'
-        ? padding.top + (Math.log10(loomMax) - Math.log10(value)) / Math.max(0.000001, Math.log10(loomMax) - Math.log10(loomMin)) * plotHeight
-        : padding.top + (loomMax - value) / Math.max(0.000001, loomMax - loomMin) * plotHeight;
+        ? loomLane.top + (Math.log10(loomMax) - Math.log10(value)) / Math.max(0.000001, Math.log10(loomMax) - Math.log10(loomMin)) * loomLane.height
+        : loomLane.top + (loomMax - value) / Math.max(0.000001, loomMax - loomMin) * loomLane.height;
       context.fillStyle = '#86a9d2';
-      context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), width - padding.right + 5, y);
+      context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), padding.left - 8, y);
     });
+    context.strokeStyle = '#4a4639'; context.setLineDash([4, 4]);
+    context.beginPath(); context.moveTo(padding.left, padding.top + laneHeight + laneGap / 2); context.lineTo(width - padding.right, padding.top + laneHeight + laneGap / 2); context.stroke(); context.setLineDash([]);
+    context.textAlign = 'left'; context.fillStyle = '#d8bd72'; context.fillText('NFT', padding.left + 6, primaryLane.top + 10);
+    context.fillStyle = '#86a9d2'; context.fillText('矿机', padding.left + 6, loomLane.top + 10);
   }
   const timeTicks = 4;
   context.textAlign = 'center';
