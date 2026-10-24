@@ -291,12 +291,11 @@ function mainstreamTradeRows(rows) {
   const points = buckets.map((bucket, index) => {
     if (!bucket.length) return null;
     const prices = bucket.map((row) => row[1]).sort((a, b) => a - b);
-    return [start + duration * (index + 0.5) / bucketCount, medianValue(prices), bucket[0][2], bucket[0][3]];
+    const median = medianValue(prices);
+    const representative = bucket.reduce((best, row) => Math.abs(row[1] - median) < Math.abs(best[1] - median) ? row : best, bucket[0]);
+    return [representative[0], representative[1], representative[2], representative[3]];
   }).filter(Boolean);
-  return points.map((point, index) => {
-    const window = points.slice(Math.max(0, index - 2), Math.min(points.length, index + 3)).map((row) => row[1]);
-    return [point[0], medianValue(window), point[2], point[3]];
-  });
+  return points;
 }
 
 function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
@@ -372,14 +371,29 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
       context.stroke();
     }
     if (historyMode !== 'line' || series.kind === 'bid') {
+      const bubbleRows = series.kind === 'trade' ? (series.pointRows || rows) : rows;
+      const bubbles = new Map();
       const quantities = series.kind === 'bid' ? rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b) : [];
       const q90 = Math.max(1, quantile(quantities, 0.9));
-      const stride = Math.max(1, Math.ceil(rows.length / Math.max(900, plotWidth * 2)));
-      for (let index = 0; index < rows.length; index += stride) {
-        const row = rows[index];
-        const radius = series.kind === 'bid' ? 2.2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4) : (historyMode === 'hybrid' ? 1.5 : 2.2);
-        context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
+      for (const row of bubbleRows) {
+        const x = px(row[0]); const y = py(row[1]);
+        if (x < padding.left || x > width - padding.right || y < padding.top || y > height - padding.bottom) continue;
+        if (series.kind === 'bid') {
+          const radius = 2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4);
+          context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
+          continue;
+        }
+        const key = `${Math.round(x)}:${Math.round(y)}`;
+        const bubble = bubbles.get(key);
+        if (bubble) bubble.count += 1;
+        else bubbles.set(key, { x, y, count: 1 });
       }
+      context.globalAlpha = historyMode === 'hybrid' ? 0.3 : 0.48;
+      bubbles.forEach((bubble) => {
+        const radius = Math.min(8, 1.35 + Math.sqrt(bubble.count));
+        context.beginPath(); context.arc(bubble.x, bubble.y, radius, 0, Math.PI * 2); context.fill();
+      });
+      context.globalAlpha = 1;
     }
   });
   return { points: allRows, bounds: { ...padding, plotWidth, plotHeight, width, height }, domain: [minPrice, maxPrice], startTime, endTime, axisLabels, scaleType };
@@ -488,14 +502,15 @@ function renderTimeline() {
     const trades = source.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const rawBids = source.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const credible = credibleBids(source.trades, rawBids);
-    const tradeSample = trimmedRows(trades);
+    const tradePoints = priceRows(trades);
+    const tradeSample = trimmedRows(tradePoints);
     const tradePlot = mainstreamTradeRows(trades);
     const bidPlot = trimmedRows(credible.rows);
-    return [key, { trades, tradeSample, tradePlot, bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot, excluded: credible.excluded + Math.max(0, credible.rows.length - bidPlot.length) }];
+    return [key, { trades, tradePoints, tradeSample, tradePlot, bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot, excluded: credible.excluded + Math.max(0, credible.rows.length - bidPlot.length) }];
   }));
   const trades = marketKeys.flatMap((key) => marketData[key].trades).sort((a, b) => a[0] - b[0]);
   const visibleTradeRows = marketKeys.flatMap((key) => marketData[key].tradePlot).sort((a, b) => a[0] - b[0]);
-  const volumeRows = marketKeys.flatMap((key) => marketData[key].tradeSample).sort((a, b) => a[0] - b[0]);
+  const volumeRows = marketKeys.flatMap((key) => marketData[key].tradePoints).sort((a, b) => a[0] - b[0]);
   const lineColors = { relicTrade: '#d8bd72', relicBid: '#69b78f', loomTrade: '#d58a68', loomBid: '#86a9d2' };
   const lineSeries = [];
   for (const key of marketKeys) {
@@ -503,11 +518,14 @@ function renderTimeline() {
     const includeTrades = historySeries !== 'bid';
     const includeBids = historySeries !== 'trade';
     const prefix = key === 'relic' ? 'relic' : 'loom';
-    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, color: lineColors[`${prefix}Trade`] });
+    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, pointRows: data.tradePoints, color: lineColors[`${prefix}Trade`] });
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const marketDomains = marketKeys.map((key) => {
-    const values = [...marketData[key].tradePlot, ...marketData[key].bidPlot].map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
+    const rangeRows = historyScale === 'focus'
+      ? [...marketData[key].tradePlot, ...marketData[key].bidPlot]
+      : [...marketData[key].tradePoints, ...marketData[key].bids];
+    const values = rangeRows.map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
     return values.length ? [historyScale === 'focus' ? quantile(values, 0.01) : values[0], historyScale === 'focus' ? quantile(values, 0.99) : values[values.length - 1]] : null;
   }).filter(Boolean);
   const commonDomain = marketDomains.length
@@ -556,7 +574,7 @@ function renderTimeline() {
   $('#allBidCount').textContent = timelineAsset === 'all' ? pair((summary) => `${summary.bids}`) : allBids.length.toLocaleString();
   $('#visibleEventCount').textContent = timelineAsset === 'all' ? `NFT / 矿机分别展示 · 已滤除异常价格 ${excludedBids} 笔` : `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已滤除异常价格 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
-  $('#focusNote').textContent = `成交与挂单按各自 1%–99% 分位截尾；挂单另按成交中位价的 35%–175% 过滤。VOL 折线为 4 桶移动均值`;
+  $('#focusNote').textContent = `折线为时间桶成交中位价；成交气泡对应链上记录并按像素汇聚显示笔数；挂单气泡半径按剩余数量映射`;
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
 
@@ -585,7 +603,7 @@ function showTimelineTooltip(event) {
   const closeTo = (row) => row && Math.abs(row[0] - targetTime) <= Math.max(3600, (timelineView.endTime - timelineView.startTime) / 70);
   const marketLabel = { relic: 'Relics', loom: 'Looms' };
   const rows = Object.entries(timelineView.markets).map(([key, data]) => {
-    const trade = findNearest(data.tradeSample);
+    const trade = findNearest(data.tradePoints);
     const bid = findNearest(data.bidPlot);
     const tradeText = closeTo(trade) ? `${trade[1].toFixed(2)} USDT` : '—';
     const bidText = closeTo(bid) ? `${bid[1].toFixed(2)} USDT · ${bid[3]} NFT` : '—';
