@@ -294,7 +294,7 @@ function robustDomain(values) {
   return [low / 1.12, high * 1.12];
 }
 
-function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear', marketDomains = null) {
+function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear', marketDomains = null, displayScale = null) {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -335,7 +335,8 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     const domain = marketDomains?.[market] || [minPrice, maxPrice];
     const domainMin = domain[0]; const domainMax = domain[1];
     const domainLogMin = Math.log10(domainMin); const domainLogMax = Math.log10(domainMax);
-    const value = scaleType === 'log' ? Math.log10(Math.max(domainMin, price)) : price;
+    const adjustedPrice = price / (displayScale?.[market] || 1);
+    const value = scaleType === 'log' ? Math.log10(Math.max(domainMin, adjustedPrice)) : adjustedPrice;
     const top = scaleType === 'log' ? domainLogMax : domainMax;
     const bottom = scaleType === 'log' ? domainLogMin : domainMin;
     const lane = laneFor(market);
@@ -356,7 +357,7 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
     context.fillStyle = '#77756d';
     context.fillText(value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(1).replace(/\.0$/, '') : value.toPrecision(2), padding.left - 8, y);
   });
-  if (marketDomains?.loom) {
+  if (marketDomains?.loom && !displayScale) {
     const [loomMin, loomMax] = marketDomains.loom;
     const loomTicks = scaleType === 'log' ? logTicks(loomMin, loomMax).reverse() : Array.from({ length: 5 }, (_, index) => loomMax - (loomMax - loomMin) * index / 4);
     const loomLane = laneFor('loom');
@@ -530,17 +531,16 @@ function renderTimeline() {
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
-  const marketDomains = timelineAsset === 'all' ? Object.fromEntries(marketKeys.map((key) => {
-    const values = lineSeries.filter((series) => series.market === key).flatMap((series) => series.rows.map((row) => row[1]));
-    return [key, robustDomain(values)];
-  })) : null;
+  const displayScale = timelineAsset === 'all' ? { relic: 1, loom: 10 } : null;
+  const marketDomains = null;
+  const scaledValues = lineSeries.flatMap((series) => series.rows.map((row) => row[1] / (displayScale?.[series.market] || 1)));
   const commonDomain = combined.length
     ? timelineAsset === 'all'
-      ? marketDomains.relic
+      ? robustDomain(scaledValues)
       : [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
     : [0.1, 1];
   const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
-  const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale, marketDomains);
+  const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale, marketDomains, displayScale);
   $('#bidTimeline').style.display = 'none';
   const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
@@ -583,7 +583,7 @@ function renderTimeline() {
   $('#visibleEventCount').textContent = `当前范围 ${visibleBids.length.toLocaleString()} 笔 · 已过滤极端挂单 ${excludedBids} 笔`;
   const rangeLabels = { all: '完整历史', '24h': '最近 24 小时', '6h': '最近 6 小时', '1h': '最近 1 小时' };
   $('#focusNote').textContent = timelineAsset === 'all'
-    ? '同一绘图区双价格轴：左轴 NFT、右轴矿机；共用时间轴，挂单按成交中位价过滤'
+    ? '统一左轴：NFT 原价、矿机价格按 1:10 映射；悬浮提示保留矿机真实价格'
     : '挂单按相邻成交中位价的 35%–175% 保留；成交气泡固定半径，挂单气泡按剩余数量映射';
   $('#timelineSnapshot').textContent = `${marketName} 横向对比 · ${rangeLabels[historyRange]} · ${priceScale === 'log' ? '对数价格轴' : '线性价格轴'} · 更新 ${new Date(timelineSnapshot.generatedAt).toLocaleString('zh-CN', { hour12: false })}`;
 }
