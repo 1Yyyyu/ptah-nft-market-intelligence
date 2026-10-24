@@ -276,6 +276,29 @@ function trimmedRows(rows, low = 0.01, high = 0.99) {
   return valid.filter((row) => row[1] >= floor && row[1] <= ceiling);
 }
 
+function mainstreamTradeRows(rows) {
+  const valid = trimmedRows(rows);
+  if (valid.length < 12) return valid;
+  const bucketCount = Math.max(48, Math.min(360, Math.round(Math.sqrt(valid.length) * 1.8)));
+  const start = valid[0][0];
+  const end = valid[valid.length - 1][0];
+  const duration = Math.max(1, end - start);
+  const buckets = Array.from({ length: bucketCount }, () => []);
+  valid.forEach((row) => {
+    const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((row[0] - start) / duration * bucketCount)));
+    buckets[index].push(row);
+  });
+  const points = buckets.map((bucket, index) => {
+    if (!bucket.length) return null;
+    const prices = bucket.map((row) => row[1]).sort((a, b) => a - b);
+    return [start + duration * (index + 0.5) / bucketCount, medianValue(prices), bucket[0][2], bucket[0][3]];
+  }).filter(Boolean);
+  return points.map((point, index) => {
+    const window = points.slice(Math.max(0, index - 2), Math.min(points.length, index + 3)).map((row) => row[1]);
+    return [point[0], medianValue(window), point[2], point[3]];
+  });
+}
+
 function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
@@ -465,10 +488,14 @@ function renderTimeline() {
     const trades = source.trades.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const rawBids = source.bids.filter((row) => row[0] >= startTime && row[0] <= endTime);
     const credible = credibleBids(source.trades, rawBids);
-    return [key, { trades, tradePlot: trimmedRows(trades), bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot: trimmedRows(credible.rows), excluded: credible.excluded + Math.max(0, credible.rows.length - trimmedRows(credible.rows).length) }];
+    const tradeSample = trimmedRows(trades);
+    const tradePlot = mainstreamTradeRows(trades);
+    const bidPlot = trimmedRows(credible.rows);
+    return [key, { trades, tradeSample, tradePlot, bids: credible.rows.filter((row) => row[1] >= 0.1), bidPlot, excluded: credible.excluded + Math.max(0, credible.rows.length - bidPlot.length) }];
   }));
   const trades = marketKeys.flatMap((key) => marketData[key].trades).sort((a, b) => a[0] - b[0]);
   const visibleTradeRows = marketKeys.flatMap((key) => marketData[key].tradePlot).sort((a, b) => a[0] - b[0]);
+  const volumeRows = marketKeys.flatMap((key) => marketData[key].tradeSample).sort((a, b) => a[0] - b[0]);
   const lineColors = { relicTrade: '#d8bd72', relicBid: '#69b78f', loomTrade: '#d58a68', loomBid: '#86a9d2' };
   const lineSeries = [];
   for (const key of marketKeys) {
@@ -479,14 +506,17 @@ function renderTimeline() {
     if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, color: lineColors[`${prefix}Trade`] });
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
-  const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
-  const commonDomain = combined.length
-    ? [historyScale === 'focus' ? quantile(combined, 0.01) : combined[0], historyScale === 'focus' ? quantile(combined, 0.99) : combined[combined.length - 1]]
+  const marketDomains = marketKeys.map((key) => {
+    const values = [...marketData[key].tradePlot, ...marketData[key].bidPlot].map((row) => row[1]).filter((value) => value > 0).sort((a, b) => a - b);
+    return values.length ? [historyScale === 'focus' ? quantile(values, 0.01) : values[0], historyScale === 'focus' ? quantile(values, 0.99) : values[values.length - 1]] : null;
+  }).filter(Boolean);
+  const commonDomain = marketDomains.length
+    ? [Math.min(...marketDomains.map((domain) => domain[0])), Math.max(...marketDomains.map((domain) => domain[1]))]
     : [0.1, 1];
   const priceScale = timelineAsset === 'all' ? 'log' : 'linear';
   const tradeView = drawTimelineCanvas($('#tradeTimeline'), lineSeries, commonDomain, startTime, endTime, priceScale);
   $('#bidTimeline').style.display = 'none';
-  const volumeView = drawVolume(visibleTradeRows, startTime, endTime);
+  const volumeView = drawVolume(volumeRows, startTime, endTime);
   const lastBucket = volumeView.buckets[volumeView.buckets.length - 1] || { count: 0, usdt: 0 };
   $('#volumeRate').textContent = `${lastBucket.count} NFT · ${lastBucket.usdt.toFixed(2)} USDT`;
   $('#tradeTimeline').style.display = 'block';
@@ -500,8 +530,8 @@ function renderTimeline() {
   const excludedBids = marketKeys.reduce((sum, key) => sum + marketData[key].excluded, 0);
   const perMarketText = (field, formatter) => marketKeys.map((key) => `${key === 'relic' ? 'NFT' : '矿机'} ${formatter(field(key))}`).join(' · ');
   $('#timelineSample').textContent = timelineAsset === 'all'
-    ? `${perMarketText((key) => marketData[key].tradePlot.length, (value) => `${value.toLocaleString()} 笔成交`)} · ${perMarketText((key) => marketData[key].bidPlot.length, (value) => `${value.toLocaleString()} 笔挂单`)}`
-    : `${visibleTradeRows.length.toLocaleString()} 笔有效成交 · ${visibleBids.length.toLocaleString()} 笔有效挂单`;
+    ? `${perMarketText((key) => marketData[key].tradeSample.length, (value) => `${value.toLocaleString()} 笔有效成交`)} · ${perMarketText((key) => marketData[key].bidPlot.length, (value) => `${value.toLocaleString()} 笔有效挂单`)}`
+    : `${marketData[timelineAsset].tradeSample.length.toLocaleString()} 笔有效成交 · ${visibleBids.length.toLocaleString()} 笔有效挂单`;
   const summaryTrades = allTrades.filter((row) => row[1] > 0).sort((a, b) => a[0] - b[0]);
   const firstTrade = summaryTrades[0]; const lastTrade = summaryTrades[summaryTrades.length - 1];
   const summaryPrices = summaryTrades.map((row) => row[1]);
@@ -555,7 +585,7 @@ function showTimelineTooltip(event) {
   const closeTo = (row) => row && Math.abs(row[0] - targetTime) <= Math.max(3600, (timelineView.endTime - timelineView.startTime) / 70);
   const marketLabel = { relic: 'Relics', loom: 'Looms' };
   const rows = Object.entries(timelineView.markets).map(([key, data]) => {
-    const trade = findNearest(data.tradePlot);
+    const trade = findNearest(data.tradeSample);
     const bid = findNearest(data.bidPlot);
     const tradeText = closeTo(trade) ? `${trade[1].toFixed(2)} USDT` : '—';
     const bidText = closeTo(bid) ? `${bid[1].toFixed(2)} USDT · ${bid[3]} NFT` : '—';
@@ -614,7 +644,7 @@ function installTimelineInteractions() {
 function render() {
   updateSummary();
   renderHolders();
-  renderComparison();
+  if ($('#compareGrid')) renderComparison();
   renderChart();
   renderTrades();
   renderTimeline();

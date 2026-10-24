@@ -6,7 +6,7 @@
   <meta name="description" content="Ptah NFT holders and market depth live dashboard">
   <title>Ptah Live Dashboard</title>
   <link rel="stylesheet" href="./styles.css">
-  <link rel="stylesheet" href="./trade.css?v=timeline-v4">
+  <link rel="stylesheet" href="./trade.css?v=timeline-v5">
 </head>
 <body>
   <div class="shell">
@@ -40,11 +40,6 @@
         <article><div class="metric-label">挂单深度 <span>ALL BIDS</span></div><strong id="depthTotal">—</strong><small id="depthNote">按剩余数量 × 挂单价</small></article>
         <article><div class="metric-label">TOP 10 占比 <span>CONCENTRATION</span></div><strong id="top10">21.7%</strong><small class="good">分布健康</small></article>
         <article><div class="metric-label">潜在卖盘 <span>SELL SUPPLY</span></div><strong id="sellSupply">—</strong><small id="sellSupplyNote">链上流通存量上限</small></article>
-      </section>
-
-      <section class="panel compare-panel" aria-label="Relics 与 Looms 市场对比">
-        <header class="panel-head"><div><p class="eyebrow">MARKET COMPARISON</p><h2>Relics / Looms 同屏对比</h2></div><small class="compare-note">同一指标、同一口径、同步展示</small></header>
-        <div class="compare-grid" id="compareGrid"></div>
       </section>
 
       <section class="panel trade-panel timeline-top" id="timelinePanel">
@@ -166,6 +161,6 @@
   <script src="./cost-data.js"></script>
   <script src="./trade-data.js"></script>
   <script src="./timeline-data.js"></script>
-  <script src="./app.js?v=timeline-v4"></script>
+  <script src="./app.js?v=timeline-v5"></script>
 </body>
 </html>
