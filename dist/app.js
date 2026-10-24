@@ -276,6 +276,27 @@ function trimmedRows(rows, low = 0.01, high = 0.99) {
   return valid.filter((row) => row[1] >= floor && row[1] <= ceiling);
 }
 
+function aggregateTradeBubbles(rows, startTime, endTime) {
+  if (!rows.length) return [];
+  const bucketCount = Math.max(24, Math.min(180, Math.floor(Math.max(1, endTime - startTime) / 3600)));
+  const duration = Math.max(1, endTime - startTime);
+  const buckets = Array.from({ length: bucketCount }, () => []);
+  rows.forEach((row) => {
+    const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((row[0] - startTime) / duration * bucketCount)));
+    buckets[index].push(row);
+  });
+  return buckets.flatMap((bucket, index) => {
+    if (!bucket.length) return [];
+    const sorted = bucket.map((row) => row[1]).sort((a, b) => a - b);
+    return [[
+      startTime + (index + 0.5) * duration / bucketCount,
+      medianValue(sorted),
+      bucket[0][2],
+      bucket.length,
+    ]];
+  });
+}
+
 function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime, scaleType = 'linear') {
   const context = canvas.getContext('2d');
   const bounds = canvas.getBoundingClientRect();
@@ -339,6 +360,7 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
 
   lineSeries.forEach((series) => {
     const rows = series.rows;
+    const marks = series.bubbleRows || rows;
     if (!rows.length) return;
     context.strokeStyle = series.color;
     context.fillStyle = series.fill || series.color;
@@ -349,12 +371,12 @@ function drawTimelineCanvas(canvas, lineSeries, sharedDomain, startTime, endTime
       context.stroke();
     }
     if (historyMode !== 'line' || series.kind === 'bid') {
-      const quantities = series.kind === 'bid' ? rows.map((row) => row[3]).filter((value) => value > 0).sort((a, b) => a - b) : [];
+      const quantities = marks.map((row) => series.kind === 'bid' ? row[3] : row[3] || 1).filter((value) => value > 0).sort((a, b) => a - b);
       const q90 = Math.max(1, quantile(quantities, 0.9));
-      const stride = Math.max(1, Math.ceil(rows.length / Math.max(900, plotWidth * 2)));
-      for (let index = 0; index < rows.length; index += stride) {
-        const row = rows[index];
-        const radius = series.kind === 'bid' ? 2.2 + Math.min(7, Math.sqrt(Math.max(0, row[3]) / q90) * 4) : (historyMode === 'hybrid' ? 1.5 : 2.2);
+      const stride = Math.max(1, Math.ceil(marks.length / Math.max(900, plotWidth * 2)));
+      for (let index = 0; index < marks.length; index += stride) {
+        const row = marks[index];
+        const radius = 2.2 + Math.min(7, Math.sqrt(Math.max(0, series.kind === 'bid' ? row[3] : row[3] || 1) / q90) * 4);
         context.beginPath(); context.arc(px(row[0]), py(row[1]), radius, 0, Math.PI * 2); context.fill();
       }
     }
@@ -372,14 +394,15 @@ function medianValue(values) {
 function credibleBids(trades, bids) {
   const filtered = [];
   let excluded = 0;
+  const validTrades = priceRows(trades);
   for (const bid of bids) {
-    let low = 0; let high = trades.length;
+    let low = 0; let high = validTrades.length;
     while (low < high) {
       const middle = (low + high) >>> 1;
-      if (trades[middle][0] <= bid[0]) low = middle + 1; else high = middle;
+      if (validTrades[middle][0] <= bid[0]) low = middle + 1; else high = middle;
     }
-    const before = trades.slice(Math.max(0, low - 40), low);
-    const referenceRows = before.length >= 5 ? before.slice(-25) : trades.slice(Math.max(0, low - 10), Math.min(trades.length, low + 15));
+    const before = validTrades.slice(Math.max(0, low - 40), low);
+    const referenceRows = before.length >= 5 ? before.slice(-25) : validTrades.slice(Math.max(0, low - 10), Math.min(validTrades.length, low + 15));
     const reference = medianValue(referenceRows.map((row) => row[1]));
     const absoluteFloor = 0.1;
     if (bid[1] < absoluteFloor || (reference && (bid[1] < reference * 0.35 || bid[1] > reference * 1.75))) excluded += 1;
@@ -476,7 +499,7 @@ function renderTimeline() {
     const includeTrades = historySeries !== 'bid';
     const includeBids = historySeries !== 'trade';
     const prefix = key === 'relic' ? 'relic' : 'loom';
-    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, color: lineColors[`${prefix}Trade`] });
+    if (includeTrades) lineSeries.push({ id: `${key}Trade`, market: key, kind: 'trade', rows: data.tradePlot, bubbleRows: aggregateTradeBubbles(data.tradePlot, startTime, endTime), color: lineColors[`${prefix}Trade`] });
     if (includeBids) lineSeries.push({ id: `${key}Bid`, market: key, kind: 'bid', rows: data.bidPlot, color: lineColors[`${prefix}Bid`] });
   }
   const combined = lineSeries.flatMap((line) => line.rows.map((row) => row[1])).sort((a, b) => a - b);
